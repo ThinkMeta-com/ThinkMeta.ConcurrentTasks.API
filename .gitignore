@@ -1,0 +1,7 @@
+/.vs
+/build
+
+# Visual Studio keeps per-user project state next to the project files.
+*.vcxproj.user
+
+/TestResults

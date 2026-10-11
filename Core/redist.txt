@@ -1,0 +1,19 @@
+Redistributable files
+=====================
+
+Of the files in this folder, only the DLL may be redistributed with a program that uses it, within
+the terms in LICENSE-Core.txt:
+
+    bin\x64\Release\ThinkMeta.ConcurrentTasks.Core.dll
+
+Everything else here is for building and stays on the development machine:
+
+    lib\x64\Release\ThinkMeta.ConcurrentTasks.Core.lib   import library
+    Core.Release.manifest.json                           version, source commit and checksum of the DLL
+    ThinkMeta.ConcurrentTasks.Core.props                 binds the core into a Visual Studio project
+
+The same release build serves debug and release builds of your program: it imports no C runtime.
+
+Terms of use for the DLL are in LICENSE-Core.txt. Everything outside this folder - the header in
+Include, the modules in Library, the tests and the samples - is covered by the MIT license in the
+repository root.

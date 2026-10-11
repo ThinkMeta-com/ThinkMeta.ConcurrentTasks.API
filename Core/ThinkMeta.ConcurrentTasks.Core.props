@@ -1,0 +1,68 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <!--
+        Everything a project needs in order to use the core: the ABI header, the import library and
+        the DLL next to the output. Import it from a .vcxproj after Microsoft.Cpp.props:
+
+          <Import Project="$(SolutionDir)Core\ThinkMeta.ConcurrentTasks.Core.props" />
+
+        All paths are relative to this file, so the same file works inside this repository and
+        inside a NuGet package, where it sits under build\native.
+
+        CT_CoreFlavor picks where the core comes from:
+          Core  - the binaries checked in next to this file; the default
+          Local - the core project in the neighbouring internal repository, for working on the core
+                  itself without deploying first. Chosen automatically when the solution being built
+                  contains that project, i.e. when the internal repository pulls a sample or the
+                  tests in to debug them against a fresh core.
+    -->
+    <PropertyGroup>
+        <!-- Built from a solution that contains the core project itself - the internal repository
+             opening a sample or the tests to debug them against a fresh core - the locally built core
+             is what the developer means. Everywhere else the deployed binaries are. -->
+        <CT_CoreFlavor Condition="'$(CT_CoreFlavor)' == '' AND Exists('$(SolutionDir)ThinkMeta.ConcurrentTasks.Core\ThinkMeta.ConcurrentTasks.Core.vcxproj')">Local</CT_CoreFlavor>
+        <CT_CoreFlavor Condition="'$(CT_CoreFlavor)' == ''">Core</CT_CoreFlavor>
+        <CT_CoreDir>$(MSBuildThisFileDirectory)</CT_CoreDir>
+        <!-- Only the release build of the core is shipped, for all configurations: it imports no CRT,
+             so it fits debug and release programs alike, and the library's asserts stay active in
+             the caller's debug build. -->
+        <CT_CoreConfiguration>Release</CT_CoreConfiguration>
+        <!-- In the repository the header sits next to this folder; in a NuGet package it sits
+             inside it. Probing both keeps one file for both worlds. -->
+        <CT_CoreIncludeDir Condition="Exists('$(CT_CoreDir)..\Include')">$(CT_CoreDir)..\Include</CT_CoreIncludeDir>
+        <CT_CoreIncludeDir Condition="'$(CT_CoreIncludeDir)' == '' AND Exists('$(CT_CoreDir)include')">$(CT_CoreDir)include</CT_CoreIncludeDir>
+        <CT_CoreBinDir>$(CT_CoreDir)bin\$(Platform)\$(CT_CoreConfiguration)\</CT_CoreBinDir>
+        <CT_CoreLibDir>$(CT_CoreDir)lib\$(Platform)\$(CT_CoreConfiguration)\</CT_CoreLibDir>
+        <CT_CoreDll>$(CT_CoreBinDir)ThinkMeta.ConcurrentTasks.Core.dll</CT_CoreDll>
+    </PropertyGroup>
+
+    <ItemDefinitionGroup>
+        <ClCompile>
+            <AdditionalIncludeDirectories>$(CT_CoreIncludeDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+        </ClCompile>
+    </ItemDefinitionGroup>
+
+    <!-- Deployed flavour: link the import library and copy the DLL beside the output. -->
+    <ItemDefinitionGroup Condition="'$(CT_CoreFlavor)' == 'Core'">
+        <Link>
+            <AdditionalLibraryDirectories>$(CT_CoreLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+            <AdditionalDependencies>ThinkMeta.ConcurrentTasks.Core.lib;%(AdditionalDependencies)</AdditionalDependencies>
+        </Link>
+    </ItemDefinitionGroup>
+
+    <!-- Local flavour: build the core from the internal repository next door. -->
+    <ItemGroup Condition="'$(CT_CoreFlavor)' == 'Local'">
+        <ProjectReference Include="$(CT_CoreDir)..\..\Core\ThinkMeta.ConcurrentTasks.Core\ThinkMeta.ConcurrentTasks.Core.vcxproj">
+            <Project>{3f8c1a64-9b2e-4d7a-8c51-6e0b9d2f4a10}</Project>
+            <!-- Only x64 exists; a reference from outside a solution is otherwise negotiated to Win32. -->
+            <SetPlatform>Platform=x64</SetPlatform>
+        </ProjectReference>
+    </ItemGroup>
+
+    <Target Name="CT_CopyCoreDll" AfterTargets="Build"
+            Condition="'$(CT_CoreFlavor)' == 'Core' AND '$(ConfigurationType)' != 'StaticLibrary'"
+            Inputs="$(CT_CoreDll)" Outputs="$(OutDir)ThinkMeta.ConcurrentTasks.Core.dll">
+        <Error Condition="!Exists('$(CT_CoreDll)')"
+               Text="The core is not deployed for $(Platform)|$(CT_CoreConfiguration): $(CT_CoreDll) is missing. Deploy it from the internal repository, or set CT_CoreFlavor=Local." />
+        <Copy SourceFiles="$(CT_CoreDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    </Target>
+</Project>

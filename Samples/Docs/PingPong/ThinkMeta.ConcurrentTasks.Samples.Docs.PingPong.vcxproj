@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(SolutionDir)ThinkMeta.SolutionFiles\ThinkMeta.Cpp.Configurations.props" />
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{7273f3ac-033a-41eb-b8f9-d5e67b1be5d4}</ProjectGuid>
+    <RootNamespace>ThinkMetaConcurrentTasksSamplesDocsPingPong</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <!-- Relative to this project, not to $(SolutionDir): the internal repository builds these
+       projects from its own solution, where $(SolutionDir) points somewhere else entirely. -->
+  <Import Project="$(MSBuildThisFileDirectory)..\..\..\Core\ThinkMeta.ConcurrentTasks.Core.props" />
+  <ItemGroup>
+    <ClCompile Include="ping-pong.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Library\ThinkMeta.ConcurrentTasks\ThinkMeta.ConcurrentTasks.vcxproj">
+      <Project>{8193c4f2-ccac-4ba7-ad92-ab1a2fad14a2}</Project>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

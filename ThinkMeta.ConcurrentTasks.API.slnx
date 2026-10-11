@@ -1,0 +1,88 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/Samples/">
+    <Project Path="Samples/ThinkMeta.ConcurrentTasks.Samples.Hashing/ThinkMeta.ConcurrentTasks.Samples.Hashing.vcxproj" Id="39ad195f-a3c3-4014-b769-67315ce30b35">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/ThinkMeta.ConcurrentTasks.Samples.PingPong/ThinkMeta.ConcurrentTasks.Samples.PingPong.vcxproj" Id="39b1f0de-d3f3-493e-a387-29b49f5ff9d7">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/Samples/Docs/">
+    <Project Path="Samples/Docs/AsyncFileCopy/ThinkMeta.ConcurrentTasks.Samples.Docs.AsyncFileCopy.vcxproj" Id="2a502043-bf08-4f53-847c-64726fd0b8d5">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideAsyncFiles/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideAsyncFiles.vcxproj" Id="5f2b5ec7-7718-4a1f-96e1-5b39131fb2ff">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideCustomPrimitives/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideCustomPrimitives.vcxproj" Id="7b9cd427-e8b3-4b32-81ad-dae28819b8cb">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideEvents/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideEvents.vcxproj" Id="325ccc2f-ecff-4c37-95df-7397f7d10d48">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuidePipes/ThinkMeta.ConcurrentTasks.Samples.Docs.GuidePipes.vcxproj" Id="f3b1398c-f3c7-4831-8e7a-0254ad7afcde">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideQueuesStacks/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideQueuesStacks.vcxproj" Id="a79536f6-f92b-4caf-b540-f4b5985ed327">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideSemaphoresLocks/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideSemaphoresLocks.vcxproj" Id="d5b6cb33-d976-4987-9f32-702eee085a1f">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideStreamingFiles/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideStreamingFiles.vcxproj" Id="60741797-3337-4cb7-abdb-87c54bf233cd">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideTaskGraphs/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideTaskGraphs.vcxproj" Id="2fdd64a1-638b-48cb-90b6-bc253b362b9d">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideTcpSockets/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideTcpSockets.vcxproj" Id="bd8a1eb1-98c5-4d3a-b431-d81f706a23fc">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideThreadCallbacks/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideThreadCallbacks.vcxproj" Id="15abe40e-37a3-4208-b119-0d19b4e075f5">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideTimeouts/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideTimeouts.vcxproj" Id="60b3090b-8c28-4d1d-a88b-466bac1267a7">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideWaitingForTasks/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideWaitingForTasks.vcxproj" Id="60c60185-aa9e-4984-a930-8c8da92cbd23">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/Hashing/ThinkMeta.ConcurrentTasks.Samples.Docs.Hashing.vcxproj" Id="41eebec4-97e5-490d-b597-c7165056feeb">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/HelloTask/ThinkMeta.ConcurrentTasks.Samples.Docs.HelloTask.vcxproj" Id="2ba6a8a0-c5fa-4fa2-b1a3-35cc559a31e5">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/OrderedOutput/ThinkMeta.ConcurrentTasks.Samples.Docs.OrderedOutput.vcxproj" Id="0e1ff3d6-74a8-4487-b48b-eaab73d692a7">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/PingPong/ThinkMeta.ConcurrentTasks.Samples.Docs.PingPong.vcxproj" Id="7273f3ac-033a-41eb-b8f9-d5e67b1be5d4">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/ProducerConsumer/ThinkMeta.ConcurrentTasks.Samples.Docs.ProducerConsumer.vcxproj" Id="14028a23-f56f-47db-937a-6a872540293d">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/TcpEchoServer/ThinkMeta.ConcurrentTasks.Samples.Docs.TcpEchoServer.vcxproj" Id="ef96174d-7ba0-426e-b7af-e4dd3a291359">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/Timeout/ThinkMeta.ConcurrentTasks.Samples.Docs.Timeout.vcxproj" Id="cbb16ba1-d275-4c47-9fd7-6fc1f93731ab">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/WaitForAGroup/ThinkMeta.ConcurrentTasks.Samples.Docs.WaitForAGroup.vcxproj" Id="5aacfca2-1d75-479b-98ed-d8bada75af6d">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/Core/">
+    <File Path="Core/ThinkMeta.ConcurrentTasks.Core.props" />
+    <File Path="Include/ThinkMeta.ConcurrentTasks/Core.h" />
+  </Folder>
+    <Project Path="Library/ThinkMeta.ConcurrentTasks/ThinkMeta.ConcurrentTasks.vcxproj" Id="8193c4f2-ccac-4ba7-ad92-ab1a2fad14a2">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Library/ThinkMeta.ConcurrentTasks.Tests/ThinkMeta.ConcurrentTasks.Tests.vcxproj" Id="2cdb7aeb-d8b0-bcc6-f6fe-196f4c65e7dd">
+      <Platform Project="x64" />
+    </Project>
+</Solution>

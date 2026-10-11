@@ -1,0 +1,4 @@
+<Project>
+    <Import Condition="'$(MSBuildProjectExtension)' == '.csproj' AND Exists('$(SolutionDir)SolutionFiles/$(SolutionName).Net.targets')"
+            Project="$(SolutionDir)SolutionFiles/$(SolutionName).Net.targets"/>
+</Project>

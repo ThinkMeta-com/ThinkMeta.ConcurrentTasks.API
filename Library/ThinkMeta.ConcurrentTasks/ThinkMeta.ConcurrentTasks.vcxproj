@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <SolutionDir Condition="'$(SolutionDir)' == ''">$(MSBuildThisFileDirectory)..\..\</SolutionDir>
+    <VCTargetsPath Condition="'$(VCTargetsPath)' == '' and Exists('C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v160\Microsoft.Cpp.Default.props')">C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v160\</VCTargetsPath>
+    <VCTargetsPath Condition="'$(VCTargetsPath)' == '' and Exists('C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v170\Microsoft.Cpp.Default.props')">C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v170\</VCTargetsPath>
+    <VCTargetsPath Condition="'$(VCTargetsPath)' == '' and Exists('C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.Cpp.Default.props')">C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\</VCTargetsPath>
+  </PropertyGroup>
+  <Import Project="$(SolutionDir)ThinkMeta.SolutionFiles\ThinkMeta.Cpp.Configurations.props" />
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{8193c4f2-ccac-4ba7-ad92-ab1a2fad14a2}</ProjectGuid>
+    <RootNamespace>ThinkMetaConcurrentTasks</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <!-- Relative to this project, not to $(SolutionDir): the internal repository builds these
+       projects from its own solution, where $(SolutionDir) points somewhere else entirely. -->
+  <Import Project="$(MSBuildThisFileDirectory)..\..\Core\ThinkMeta.ConcurrentTasks.Core.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="AsyncIo\AsyncFile.ixx" />
+    <ClCompile Include="AsyncIo\OrderedFileWriter.ixx" />
+    <ClCompile Include="AsyncIo\StreamedFileReader.ixx" />
+    <ClCompile Include="AsyncIo\AsyncFileIoRequest.ixx" />
+    <ClCompile Include="AsyncIo\AsyncIoRequest.ixx" />
+    <ClCompile Include="AsyncIo\AsyncSocket.ixx" />
+    <ClCompile Include="AsyncIo\AsyncSocketIoRequest.ixx" />
+    <ClCompile Include="AsyncIo\AsyncIpSocket.ixx" />
+    <ClCompile Include="AsyncIo\AsyncTcpSocket.ixx" />
+    <ClCompile Include="Collections/BasicStack.ixx" />
+    <ClCompile Include="Cpp\Padded.ixx" />
+    <ClCompile Include="Memory\SpscVirtualMemoryPipe.ixx" />
+    <ClCompile Include="Memory\SequentialMemory.ixx" />
+    <ClCompile Include="Synchronization\Suspendable.ixx" />
+    <ClCompile Include="Synchronization\SuspendableBase.ixx" />
+    <ClCompile Include="Collections/ConcurrentStack.ixx" />
+    <ClCompile Include="Synchronization/CriticalSection.ixx" />
+    <ClCompile Include="Synchronization\AutoResetEvent.ixx" />
+    <ClCompile Include="Tasks\WaitableTask.ixx" />
+    <ClCompile Include="Synchronization/ManualResetEvent.ixx" />
+    <ClCompile Include="Synchronization/Semaphore.ixx" />
+    <ClCompile Include="Tasks/Task.ixx" />
+    <ClCompile Include="Synchronization/TaskGroup.ixx" />
+    <ClCompile Include="Collections/BoundedPointerQueue.ixx" />
+    <ClCompile Include="Synchronization/Waitable.ixx" />
+    <ClCompile Include="Windows\ConvenienceThread.ixx" />
+    <ClCompile Include="Windows\Error.ixx" />
+    <ClCompile Include="Windows\File.ixx" />
+    <ClCompile Include="Windows\IoCompletionPort.ixx" />
+    <ClCompile Include="Windows\IpSocket.ixx" />
+    <ClCompile Include="Windows\Socket.ixx" />
+    <ClCompile Include="Windows\TcpSocket.ixx" />
+    <ClCompile Include="Windows\Thread.ixx" />
+    <ClCompile Include="Windows\VirtualMemory.ixx" />
+    <ClCompile Include="Windows\WinsockError.ixx" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Defs.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)..\..\Include\ThinkMeta.ConcurrentTasks\Core.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

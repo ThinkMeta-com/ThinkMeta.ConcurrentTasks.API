@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="Collections/BasicStack.ixx">
+      <Filter>Collections</Filter>
+    </ClCompile>
+    <ClCompile Include="Collections/BoundedPointerQueue.ixx">
+      <Filter>Collections</Filter>
+    </ClCompile>
+    <ClCompile Include="Collections/ConcurrentStack.ixx">
+      <Filter>Collections</Filter>
+    </ClCompile>
+    <ClCompile Include="Interface/ThinkMeta.ConcurrentTasks.ixx">
+      <Filter>Interface</Filter>
+    </ClCompile>
+    <ClCompile Include="Schedulers\DefaultTaskScheduler.ixx">
+      <Filter>Schedulers</Filter>
+    </ClCompile>
+    <ClCompile Include="Schedulers\TaskSwapScheduler.ixx">
+      <Filter>Schedulers</Filter>
+    </ClCompile>
+    <ClCompile Include="Synchronization\Suspendable.ixx">
+      <Filter>Synchronization</Filter>
+    </ClCompile>
+    <ClCompile Include="Synchronization\SuspendableBase.ixx">
+      <Filter>Synchronization</Filter>
+    </ClCompile>
+    <ClCompile Include="Synchronization/CriticalSection.ixx">
+      <Filter>Synchronization</Filter>
+    </ClCompile>
+    <ClCompile Include="Synchronization/ManualResetEvent.ixx">
+      <Filter>Synchronization</Filter>
+    </ClCompile>
+    <ClCompile Include="Synchronization/Semaphore.ixx">
+      <Filter>Synchronization</Filter>
+    </ClCompile>
+    <ClCompile Include="Synchronization/TaskGroup.ixx">
+      <Filter>Synchronization</Filter>
+    </ClCompile>
+    <ClCompile Include="Synchronization/Waitable.ixx">
+      <Filter>Synchronization</Filter>
+    </ClCompile>
+    <ClCompile Include="Tasks\WaitableTask.ixx">
+      <Filter>Tasks</Filter>
+    </ClCompile>
+    <ClCompile Include="Tasks/Task.ixx">
+      <Filter>Tasks</Filter>
+    </ClCompile>
+    <ClCompile Include="AsyncIo\AsyncIo.ixx">
+      <Filter>Async I/O</Filter>
+    </ClCompile>
+    <ClCompile Include="Windows\Error.ixx">
+      <Filter>Windows</Filter>
+    </ClCompile>
+    <ClCompile Include="Windows\Thread.ixx">
+      <Filter>Windows</Filter>
+    </ClCompile>
+    <ClCompile Include="Windows\IoCompletionPort.ixx">
+      <Filter>Windows</Filter>
+    </ClCompile>
+    <ClCompile Include="Windows\IpSocket.ixx">
+      <Filter>Windows</Filter>
+    </ClCompile>
+    <ClCompile Include="Windows\VirtualMemory.ixx">
+      <Filter>Windows</Filter>
+    </ClCompile>
+    <ClCompile Include="Windows\File.ixx">
+      <Filter>Windows</Filter>
+    </ClCompile>
+    <ClCompile Include="Windows\ConvenienceThread.ixx">
+      <Filter>Windows</Filter>
+    </ClCompile>
+    <ClCompile Include="AsyncIo\AsyncIoHandler.ixx">
+      <Filter>Async I/O</Filter>
+    </ClCompile>
+    <ClCompile Include="AsyncIo\AsyncIoRequest.ixx">
+      <Filter>Async I/O</Filter>
+    </ClCompile>
+    <ClCompile Include="Cpp\Padded.ixx">
+      <Filter>C++</Filter>
+    </ClCompile>
+    <ClCompile Include="Schedulers\FiberProc.ixx">
+      <Filter>Schedulers</Filter>
+    </ClCompile>
+    <ClCompile Include="AsyncIo\AsyncFile.ixx">
+      <Filter>Async I/O</Filter>
+    </ClCompile>
+    <ClCompile Include="AsyncIo\OrderedFileWriter.ixx">
+      <Filter>Async I/O</Filter>
+    </ClCompile>
+    <ClCompile Include="AsyncIo\StreamedFileReader.ixx">
+      <Filter>Async I/O</Filter>
+    </ClCompile>
+    <ClCompile Include="Memory\SpscVirtualMemoryPipe.ixx">
+      <Filter>Memory</Filter>
+    </ClCompile>
+    <ClCompile Include="Memory\SequentialMemory.ixx">
+      <Filter>Memory</Filter>
+    </ClCompile>
+    <ClCompile Include="Synchronization\AutoResetEvent.ixx">
+      <Filter>Synchronization</Filter>
+    </ClCompile>
+    <ClCompile Include="Windows\WinsockError.ixx">
+      <Filter>Windows</Filter>
+    </ClCompile>
+    <ClCompile Include="Windows\Socket.ixx">
+      <Filter>Windows</Filter>
+    </ClCompile>
+    <ClCompile Include="Windows\TcpSocket.ixx">
+      <Filter>Windows</Filter>
+    </ClCompile>
+    <ClCompile Include="AsyncIo\AsyncSocket.ixx">
+      <Filter>Async I/O</Filter>
+    </ClCompile>
+    <ClCompile Include="AsyncIo\AsyncSocketIoRequest.ixx">
+      <Filter>Async I/O</Filter>
+    </ClCompile>
+    <ClCompile Include="AsyncIo\AsyncIpSocket.ixx">
+      <Filter>Async I/O</Filter>
+    </ClCompile>
+    <ClCompile Include="AsyncIo\AsyncTcpSocket.ixx">
+      <Filter>Async I/O</Filter>
+    </ClCompile>
+    <ClCompile Include="AsyncIo\AsyncFileIoRequest.ixx">
+      <Filter>Async I/O</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Defs.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Collections">
+      <UniqueIdentifier>{6b906da2-1f32-4a88-9a49-4f0efbbf23e8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Interface">
+      <UniqueIdentifier>{41ea51d8-d6e8-46a4-b911-ae162ffdd588}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Schedulers">
+      <UniqueIdentifier>{75a106e3-1168-4b7c-99e6-9d572bb063e9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Synchronization">
+      <UniqueIdentifier>{cbb3982c-66c3-4d7a-8ed9-451ddc7e7f6a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tasks">
+      <UniqueIdentifier>{e98c0dd3-ccf3-429d-bacc-dcb87994cc8f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Async I/O">
+      <UniqueIdentifier>{22f5f86f-c9a4-4b89-89e7-20c18c4e992a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Windows">
+      <UniqueIdentifier>{a1d715ea-d095-4215-8346-845feeec620c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="C++">
+      <UniqueIdentifier>{6dad0e2f-e92b-40a0-94a9-533fac0af687}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Memory">
+      <UniqueIdentifier>{dd235951-acee-49c9-a629-7f6fb158e775}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
