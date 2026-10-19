@@ -3,10 +3,12 @@
 
 #include <cstdio>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.WaitableTask;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
+// [/names]
 
 // [task]
 // A task is an object with a Run method. WaitableTask adds Wait, so others can wait
@@ -18,9 +20,9 @@ public:
 };
 // [/task]
 
+// [main]
 int main()
 {
-    // [main]
     // The main thread becomes a task too, so it can wait without blocking a
     // scheduler thread.
     TC::ConvertThreadToTask();
@@ -41,5 +43,5 @@ int main()
     scheduler->Destroy();
     TC::ConvertTaskToThread();
     return 0;
-    // [/main]
 }
+// [/main]

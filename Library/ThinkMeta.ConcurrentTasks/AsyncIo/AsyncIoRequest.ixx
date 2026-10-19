@@ -42,6 +42,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <remarks>The <c>OVERLAPPED</c> is zeroed (offset <c>0</c>) and no bytes are transferred.</remarks>
         AsyncIoRequestBase() noexcept { ResetInternal(); }
 
+        /// <summary>Stores the transferred byte count; for use by <see cref="RequestCompleted"/>.</summary>
+        /// <param name="transferredBytes">Bytes the operation transferred.</param>
+        void SetTransferredBytes(DWORD transferredBytes) noexcept { transferredBytes_ = transferredBytes; }
+
     public:
         /// <summary>Maps an <c>OVERLAPPED</c> back to its request.</summary>
         /// <param name="overlapped">An <c>OVERLAPPED</c> that belongs to a request, e.g. as dequeued from the port.</param>
@@ -53,10 +57,6 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <summary>Bytes the completed operation transferred (as stored by <see cref="RequestCompleted"/>).</summary>
         /// <returns>The transferred bytes; <c>0</c> before completion and after <see cref="Reset"/>.</returns>
         DWORD GetTransferredBytes() const noexcept { return transferredBytes_; }
-
-        /// <summary>Stores the transferred byte count; for use by <see cref="RequestCompleted"/>.</summary>
-        /// <param name="transferredBytes">Bytes the operation transferred.</param>
-        void SetTransferredBytes(DWORD transferredBytes) noexcept { transferredBytes_ = transferredBytes; }
 
         /// <summary>Completes the request on the calling thread when the Win32 call succeeded at once.</summary>
         /// <param name="transferredBytes">Bytes the Win32 call reported as transferred.</param>
@@ -130,10 +130,6 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <returns>The error code; <c>0</c> if the operation succeeded or has not completed yet.</returns>
         ErrorType GetError() const noexcept { return error_; }
 
-        /// <summary>Stores the error code; for use by <see cref="AsyncIoRequestBase::RequestCompleted"/>.</summary>
-        /// <param name="error">The operation's error code; <c>0</c> for success.</param>
-        void SetError(ErrorType error) noexcept { error_ = error; }
-
         /// <summary>Like <see cref="AsyncIoRequestBase::Reset"/>, and also clears the error code.</summary>
         void Reset() noexcept override
         {
@@ -144,6 +140,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     protected:
         /// <summary>Creates a request with error code <c>0</c>.</summary>
         AsyncIoRequest() noexcept { ResetInternal(); }
+
+        /// <summary>Stores the error code; for use by <see cref="AsyncIoRequestBase::RequestCompleted"/>.</summary>
+        /// <param name="error">The operation's error code; <c>0</c> for success.</param>
+        void SetError(ErrorType error) noexcept { error_ = error; }
 
     private:
         void ResetInternal() noexcept { error_ = 0; }

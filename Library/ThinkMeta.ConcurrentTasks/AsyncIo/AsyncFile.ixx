@@ -53,6 +53,15 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <summary>Upper bound <see cref="blocksInFlight"/> is clamped to.</summary>
         static constexpr std::size_t MaxBlocksInFlight = 64;
 
+        /// <summary>Sector size the last block of an unbuffered file is rounded up to.</summary>
+        /// <remarks>
+        /// With <c>FILE_FLAG_NO_BUFFERING</c> every request must be a multiple of the sector size;
+        /// <see cref="AsyncFile::ReadFile"/> reads the last block rounded up to this (the file ends
+        /// the read), and <see cref="AsyncFile::WriteFile"/> writes a last block that is no multiple
+        /// of it padded with zeros and cuts the file to its exact size.
+        /// </remarks>
+        static constexpr DWORD SectorAlign = 4096;
+
         /// <summary>Bytes per request.</summary>
         /// <remarks><c>0</c> means <see cref="DefaultBlockSize"/>.</remarks>
         DWORD blockSize = DefaultBlockSize;
@@ -62,7 +71,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         std::size_t blocksInFlight = DefaultBlocksInFlight;
 
         /// <summary>First byte read by <see cref="AsyncFile::ReadFile"/>.</summary>
-        /// <remarks>The memory gets the rest of the file; ignored by <see cref="AsyncFile::WriteFile"/>.</remarks>
+        /// <remarks>
+        /// The memory gets the rest of the file; ignored by <see cref="AsyncFile::WriteFile"/>. With
+        /// <c>FILE_FLAG_NO_BUFFERING</c> a multiple of <see cref="SectorAlign"/>.
+        /// </remarks>
         std::uint64_t startOffset = 0;
     };
 
@@ -135,6 +147,15 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <param name="size">Receives the file size in bytes; unchanged on failure.</param>
         /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of <c>GetFileSizeEx</c>.</returns>
         ErrorType GetSize(FileSize& size) noexcept;
+
+        /// <summary>Sets the file size. Precondition: a file is open.</summary>
+        /// <param name="size">The new size in bytes; extending fills with zeros, shrinking cuts the file.</param>
+        /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
+        /// <remarks>
+        /// Needs no file pointer, so it also works on a file opened with <c>FILE_FLAG_NO_BUFFERING</c> for a
+        /// size inside a sector. Only while no write is in flight.
+        /// </remarks>
+        ErrorType SetSize(FileSize size) noexcept;
 
         /// <summary>Starts an overlapped read.</summary>
         /// <param name="buffer">
@@ -228,7 +249,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <param name="creationDisposition">Creation disposition, as for <see cref="Create"/>; usually <c>OPEN_EXISTING</c>.</param>
         /// <param name="flagsAndAttributes">
         /// Flags and attributes, as for <see cref="Create"/>; with <c>FILE_FLAG_NO_BUFFERING</c> the memory's blocks
-        /// and <see cref="BulkIoOptions::blockSize"/> must be sector-aligned.
+        /// and <see cref="BulkIoOptions::blockSize"/> must be sector-aligned. The last block is then requested
+        /// rounded up to <see cref="BulkIoOptions::SectorAlign"/> (the memory must have room for that) and
+        /// released with the bytes the file still had.
         /// </param>
         /// <param name="writeSequentialMemory">
         /// Receives the file content; must not be <c>nullptr</c>; borrowed, must outlive the call.
@@ -250,8 +273,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// Each finished block goes to the memory at once, so a consumer can start on the first blocks
         /// while the rest is on its way; a memory with a bounded window must hold at least
         /// <see cref="BulkIoOptions::blocksInFlight"/> blocks. The memory is borrowed: it must outlive the call. Returns the first
-        /// error (open, size, <c>ERROR_NOT_ENOUGH_MEMORY</c> for a <c>nullptr</c> block or the request array, or a
-        /// read's Win32 error); after an error no block is released to the memory any more, but the
+        /// error (open, size, <c>ERROR_NOT_ENOUGH_MEMORY</c> for a <c>nullptr</c> block or the request array, a
+        /// read's Win32 error, or <c>ERROR_HANDLE_EOF</c> if a read came back short because the file shrank
+        /// meanwhile); after an error no block is released to the memory any more, but the
         /// call still waits for every read in flight before it returns.
         /// </remarks>
         /// <seealso cref="WriteFile"/>
@@ -268,7 +292,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <param name="flagsAndAttributes">
         /// Flags and attributes, as for <see cref="Create"/>; with <c>FILE_FLAG_NO_BUFFERING</c> the memory's blocks
-        /// and <see cref="BulkIoOptions::blockSize"/> must be sector-aligned.
+        /// and <see cref="BulkIoOptions::blockSize"/> must be sector-aligned (<see cref="BulkIoOptions::SectorAlign"/>).
+        /// A last block that is not is taken as the end of the data: it is written as whole sectors
+        /// from a zero-padded copy, and the file is then cut to its exact size.
         /// </param>
         /// <param name="readSequentialMemory">
         /// Supplies the data to write; must not be <c>nullptr</c>; borrowed, must outlive the call.
@@ -289,7 +315,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// with <see cref="Memory::IReadSequentialMemory::ReleaseReadMemory"/>(bytes written) once its write has
         /// completed, in order. The file
         /// is not truncated to the written size (with <c>OPEN_EXISTING</c>/<c>OPEN_ALWAYS</c> older data beyond it
-        /// stays). The memory is borrowed: it must outlive the call. Returns the first error (open,
+        /// stays), except with <c>FILE_FLAG_NO_BUFFERING</c> and a last block that is no multiple of
+        /// <see cref="BulkIoOptions::SectorAlign"/>: then the file is cut to the written size. The memory
+        /// is borrowed: it must outlive the call. Returns the first error (open,
         /// <c>ERROR_NOT_ENOUGH_MEMORY</c> for the request array, or a write's Win32 error); after an error
         /// no new block is requested, but the call waits for every write in flight and still
         /// releases their blocks before it returns.
@@ -304,6 +332,13 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         // other error (success = completed at once, or a failure to issue) is returned as is.
         ErrorType WaitForCompletion(ErrorType error, WaitableAsyncFileIoRequest_s& asyncIoRequest, Duration timeout) noexcept;
 
+        // whole sectors (BulkIoOptions::SectorAlign) for unbuffered requests
+        template <typename T>
+        static constexpr T RoundUpToSector(T bytes) noexcept
+        {
+            return (bytes + BulkIoOptions::SectorAlign - 1) / BulkIoOptions::SectorAlign * BulkIoOptions::SectorAlign;
+        }
+
         Windows::File file_;
     };
 
@@ -317,7 +352,6 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     {
         CT_ASSERT(!IsValid());
 
-        file_.Close();
 
         // open file with additional FILE_FLAG_OVERLAPPED attribute
         ErrorType error = file_.Create(fileName, access, shareMode, nullptr, creationDisposition, flagsAndAttributes | FILE_FLAG_OVERLAPPED, nullptr);
@@ -344,6 +378,13 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     inline AsyncFile::ErrorType AsyncFile::GetSize(FileSize& size) noexcept
     {
         return file_.GetSize(size);
+    }
+
+    inline AsyncFile::ErrorType AsyncFile::SetSize(FileSize size) noexcept
+    {
+        FILE_END_OF_FILE_INFO endOfFile{};
+        endOfFile.EndOfFile.QuadPart = static_cast<LONGLONG>(size);
+        return file_.SetEofInformation(endOfFile);
     }
 
     inline AsyncFile::ErrorType AsyncFile::ReadAsync(void* buffer, DWORD bytesToRead, AsyncFileIoRequest& asyncIoRequest) noexcept
@@ -387,7 +428,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
         // Timed out: cancel the operation, then wait for its completion without a limit - the
         // OVERLAPPED lives in the caller's frame. If it completed meanwhile, its result stands.
-        CancelIoEx(file_.GetHandle(), &asyncIoRequest.GetOverlapped());
+        file_.CancelIo(asyncIoRequest.GetOverlapped());
         asyncIoRequest.Wait();
 
         error = asyncIoRequest.GetError();
@@ -457,15 +498,20 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         }
 
         // requests[] is a ring: request n uses slot n % inFlight; issued - released are in flight
-        std::uint64_t offset   = begin;
-        std::size_t   issued   = 0;
-        std::size_t   released = 0;
+        std::uint64_t offset     = begin;
+        std::size_t   issued     = 0;
+        std::size_t   released   = 0;
+        const bool    unbuffered = (flagsAndAttributes & FILE_FLAG_NO_BUFFERING) != 0;
+        CT_ASSERT(!unbuffered || begin % BulkIoOptions::SectorAlign == 0);
         // the oldest request has finished: its block goes to the memory, unless an error has
         // ended the stream (then only the requests in flight are waited for)
         const auto release = [&]() noexcept {
             auto& request = requests[released % inFlight];
             if (Error::Succeeded(error) && Error::Failed(request.GetError()))
                 error = request.GetError();
+            // a short read: the file shrank after GetSize; later blocks would land shifted
+            if (Error::Succeeded(error) && request.GetTransferredBytes() != std::min<std::uint64_t>(blockSize, size - request.GetOffset()))
+                error = ERROR_HANDLE_EOF;
             if (Error::Succeeded(error))
                 writeSequentialMemory->ReleaseWriteMemory(request.GetTransferredBytes());
             ++released;
@@ -477,16 +523,18 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                 release();
 
             if (Error::Succeeded(error) && offset < size && issued - released < inFlight) {
-                const auto bytes  = static_cast<DWORD>(std::min<std::uint64_t>(blockSize, size - offset));
-                std::byte* memory = writeSequentialMemory->RequestWriteMemory(bytes);
+                const auto bytes = static_cast<DWORD>(std::min<std::uint64_t>(blockSize, size - offset));
+                // unbuffered: whole sectors, the file ends the last read (it transfers what is left)
+                const DWORD request = unbuffered ? RoundUpToSector(bytes) : bytes;
+                std::byte*  memory  = writeSequentialMemory->RequestWriteMemory(request);
                 if (memory == nullptr) {
                     error = ERROR_NOT_ENOUGH_MEMORY;
                     continue;
                 }
-                auto& request = requests[issued % inFlight];
-                request.Reset();
-                request.SetOffset(offset);
-                const ErrorType result = asyncFile.ReadAsync(memory, bytes, request);
+                auto& asyncRequest = requests[issued % inFlight];
+                asyncRequest.Reset();
+                asyncRequest.SetOffset(offset);
+                const ErrorType result = asyncFile.ReadAsync(memory, request, asyncRequest);
                 if (Error::Failed(result) && !Error::IsPending(result)) {
                     error = result;
                     continue;
@@ -528,12 +576,22 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         std::size_t   issued      = 0;
         std::size_t   released    = 0;
         bool          endOfStream = false;
+        const bool    unbuffered  = (flagsAndAttributes & FILE_FLAG_NO_BUFFERING) != 0;
+        // unbuffered: a last block that is no whole number of sectors is written from a
+        // sector-aligned copy padded with zeros, and the file is cut to its exact size before the
+        // handle closes
+        std::byte*  tailCopy  = nullptr; // the padded copy (VirtualAlloc: page-aligned, zeroed), once its write is issued
+        std::size_t tailBytes = 0;       // the block's own bytes
         // the oldest request has finished: its block goes back to the memory
         const auto release = [&]() noexcept {
             auto& request = requests[released % inFlight];
             if (Error::Succeeded(error) && Error::Failed(request.GetError()))
                 error = request.GetError();
-            readSequentialMemory->ReleaseReadMemory(request.GetTransferredBytes());
+            // the tail is the last request issued; it transferred the padded size, the memory gets
+            // back the block's bytes
+            const DWORD transferred = request.GetTransferredBytes();
+            const bool  tail        = tailCopy != nullptr && released + 1 == issued;
+            readSequentialMemory->ReleaseReadMemory(tail && transferred > tailBytes ? tailBytes : transferred);
             ++released;
         };
 
@@ -550,14 +608,37 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                     endOfStream = true;
                     continue;
                 }
+                const std::byte* buffer = data;
+                std::size_t      size   = bytes;
+                std::byte*       copy   = nullptr;
+                if (unbuffered && bytes % BulkIoOptions::SectorAlign != 0) {
+                    // the last block: whole sectors from a zeroed copy, nothing after it
+                    endOfStream = true;
+                    size        = RoundUpToSector(bytes);
+                    copy        = static_cast<std::byte*>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+                    if (copy == nullptr) {
+                        readSequentialMemory->ReleaseReadMemory(0);
+                        error = ERROR_NOT_ENOUGH_MEMORY;
+                        continue;
+                    }
+                    CopyMemory(copy, data, bytes);
+                    buffer = copy;
+                }
                 auto& request = requests[issued % inFlight];
                 request.Reset();
                 request.SetOffset(offset);
-                const ErrorType result = asyncFile.WriteAsync(data, static_cast<DWORD>(bytes), request);
+                const ErrorType result = asyncFile.WriteAsync(buffer, static_cast<DWORD>(size), request);
                 if (Error::Failed(result) && !Error::IsPending(result)) {
+                    if (copy != nullptr)
+                        VirtualFree(copy, 0, MEM_RELEASE);
                     readSequentialMemory->ReleaseReadMemory(0);
                     error = result;
                     continue;
+                }
+                if (copy != nullptr) {
+                    // known to release only once the write is issued: the tail is the last request
+                    tailCopy  = copy;
+                    tailBytes = bytes;
                 }
                 offset += bytes;
                 ++issued;
@@ -568,6 +649,15 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                 requests[released % inFlight].Wait();
                 release();
             }
+        }
+
+        if (tailCopy != nullptr) {
+            // The padded last sector is written: cut the file to its exact size on this very handle.
+            // FileEndOfFileInfo needs no file pointer, which an unbuffered handle could not even be
+            // set to a position inside a sector.
+            if (Error::Succeeded(error))
+                error = asyncFile.SetSize(offset);
+            VirtualFree(tailCopy, 0, MEM_RELEASE);
         }
 
         asyncFile.Close();

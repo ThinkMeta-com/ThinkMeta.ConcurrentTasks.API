@@ -12,6 +12,7 @@ module;
 
 #include <Windows.h>
 
+#include <atomic>
 #include <cstddef>
 
 export module ThinkMeta.ConcurrentTasks.Memory.SpscVirtualMemoryPipe;
@@ -55,7 +56,7 @@ namespace ThinkMeta::ConcurrentTasks::Memory {
         /// <summary>Returns the size announced by <see cref="Initialize"/>.</summary>
         /// <returns>The announced stream size in bytes.</returns>
         /// <remarks>Suspends the caller until Initialize has been called.</remarks>
-        std::size_t GetSize() const noexcept
+        std::size_t GetSize() const noexcept override
         {
             sizeAvailableEvent_.Wait();
             return memorySize_;
@@ -77,12 +78,16 @@ namespace ThinkMeta::ConcurrentTasks::Memory {
             // written_ and endOfStream_ are written by the producer; readMemoryAvailableEvent_ is
             // set after each change, so a consumer that saw too little waits for the next change
             // and checks again. An auto-reset event suffices with a single consumer.
+            // The end of the stream is read first: the producer publishes its last bytes before it
+            // sets the end, so a consumer that sees the end (acquire) sees every byte as well. The
+            // other way round the bytes of the last block could be missed and the stream cut short.
             for (;;) {
-                auto available = written_ - readPosition_;
+                const bool endOfStream = endOfStream_.load(std::memory_order_acquire);
+                const auto available   = written_.load(std::memory_order_acquire) - readPosition_;
                 if (available >= size)
                     break;
 
-                if (endOfStream_) {
+                if (endOfStream) {
                     if (available > 0) {
                         size = available;
                         break;
@@ -166,14 +171,16 @@ namespace ThinkMeta::ConcurrentTasks::Memory {
         /// <seealso cref="RequestReadMemory"/>
         void ReleaseWriteMemory(std::size_t size) noexcept override
         {
-            written_ += size;
+            // release: the bytes are visible to a consumer that sees the new count
+            written_.fetch_add(size, std::memory_order_release);
             readMemoryAvailableEvent_.Set();
         }
 
         /// <summary>Marks the end of the stream and wakes the consumer.</summary>
         void SetEndOfStream() noexcept override
         {
-            endOfStream_ = true;
+            // release, after the last ReleaseWriteMemory: see RequestReadMemory
+            endOfStream_.store(true, std::memory_order_release);
             readMemoryAvailableEvent_.Set();
         }
 
@@ -190,13 +197,15 @@ namespace ThinkMeta::ConcurrentTasks::Memory {
         // ones; readPosition_ = end of the blocks handed to the consumer, read_ = released bytes not
         // yet decommitted, counted from minCommitPosition_; [minCommitPosition_, maxCommitPosition_)
         // is committed.
-        std::size_t memorySize_{0};
-        std::size_t writePosition_{0};
-        std::size_t readPosition_{0};
-        std::size_t written_{0};
-        std::size_t read_{0};
-        std::size_t minCommitPosition_{0};
-        std::size_t maxCommitPosition_{0};
-        bool        endOfStream_{false};
+        // written_ and endOfStream_ cross from the producer to the consumer; the rest belongs to
+        // one side each.
+        std::size_t              memorySize_{0};
+        std::size_t              writePosition_{0};
+        std::size_t              readPosition_{0};
+        std::atomic<std::size_t> written_{0};
+        std::size_t              read_{0};
+        std::size_t              minCommitPosition_{0};
+        std::size_t              maxCommitPosition_{0};
+        std::atomic<bool>        endOfStream_{false};
     };
 } // namespace ThinkMeta::ConcurrentTasks::Memory

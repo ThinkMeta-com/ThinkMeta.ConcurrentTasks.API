@@ -53,6 +53,20 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
         /// <seealso cref="Push"/>
         T* Pop() noexcept { return static_cast<T*>(InterlockedPopEntrySList(&head_)); }
 
+        /// <summary>Removes all items in one operation and returns them as a chain.</summary>
+        /// <returns>
+        /// The former top item, linked to the next through <c>SLIST_ENTRY::Next</c> down to <c>nullptr</c>;
+        /// <c>nullptr</c> if the stack was empty.
+        /// </returns>
+        /// <remarks>
+        /// <c>InterlockedFlushSList</c>: the stack is empty afterwards and is not touched by walking
+        /// the chain, so a caller that must not access the stack after a certain point (the object
+        /// may go away) takes the chain first and works through it afterwards. Read an item's
+        /// <c>Next</c> before handing the item to anybody else.
+        /// </remarks>
+        /// <seealso cref="Pop"/>
+        T* Flush() noexcept { return static_cast<T*>(InterlockedFlushSList(&head_)); }
+
         /// <summary>Returns the number of items at the moment of the call.</summary>
         /// <returns>The item count, modulo 65536.</returns>
         /// <remarks>

@@ -92,7 +92,8 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
         /// the capacity rule above).
         /// </remarks>
         /// <seealso cref="Dequeue"/>
-        // On a full queue the loop advances tail_ past occupied slots and keeps spinning.
+        // On a full queue the loop advances tail_ past occupied slots and keeps spinning; if it
+        // gets a slot later, head_ and tail_ no longer match the slots.
         void Enqueue(T* ptr) noexcept
         {
             // Slot protocol: in round r (= index >> shift) a slot is free for enqueue at sequence
@@ -107,10 +108,11 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
                 std::atomic_ref<_Node> slotRef(ring_.nodes[slotIndex & ring_.mask]);
                 _Node                  expected = slotRef.load(std::memory_order_acquire);
 
-                // Check if the slot is empty and has the expected sequence number.
-                // There are two reasons why the slot might not be used:
-                // 1. Another thread has already enqueued an item in this slot (value != nullptr).
-                // 2. The item in this slot has been dequeued so the sequence number doesn't match the expected sequence.
+                // The slot is free for this round only at the expected sequence (the value is not
+                // checked; it may be a stale one). Otherwise:
+                // 1. 2r + 1: another thread has already enqueued an item in this slot.
+                // 2. 2r + 2: the item has already been dequeued again (tail_ was read stale).
+                // 3. 2r - 1: the item of the previous round is still there (queue full).
                 if (expected.sequence == expectedSequence) {
                     _Node newValue{ptr, expected.sequence + 1};
 
@@ -134,7 +136,10 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
         /// means "try again later", not proof of emptiness.
         /// </remarks>
         /// <seealso cref="Enqueue"/>
-        // That moment: another consumer has taken the head slot but not yet advanced head_.
+        // That moment: another consumer has taken the head slot but not yet advanced head_. Only
+        // that consumer advances head_ (a consumer that finds the slot taken returns nullptr
+        // without helping), so this relies on its compare_exchange_weak not failing spuriously:
+        // true on x64 (lock cmpxchg); on LL/SC platforms head_ would stay behind for good.
         T* Dequeue() noexcept
         {
             for (;;) {
@@ -147,20 +152,25 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
                 std::atomic_ref<_Node> slotRef(slot);
                 _Node                  node = slotRef.load(std::memory_order_acquire);
 
-                // Check if the slot contains a valid pointer (value != nullptr).
+                // The slot holds an item of this round only at sequence 2r + 1; anything else means
+                // empty or just taken by another consumer.
                 if (node.sequence != expectedSequence)
                     return nullptr;
 
-                // Prepare a new node with nullptr and incremented sequence number.
-                // (Only the sequence is advanced; the stale value stays in the slot and is ignored,
-                // because the sequence alone decides whether a slot is full.)
-                auto                           newNode{node.sequence + 1};
-                std::atomic_ref<std::uint64_t> newSlotRef(slot.sequence);
+                // Advance only the sequence, to 2(r + 1), the free state of the next round. The stale
+                // value stays in the slot and is ignored, because the sequence alone decides whether
+                // a slot is full.
+                // This 8-byte CAS on slot.sequence and the 16-byte accesses to the whole slot in
+                // Enqueue touch the same memory with different widths. The C++ memory model does not
+                // cover such mixed-size atomics; x64 keeps them coherent (a second x64 assumption next
+                // to the compare_exchange_weak on head_, see above).
+                auto                           newSequence{node.sequence + 1};
+                std::atomic_ref<std::uint64_t> sequenceRef(slot.sequence);
 
-                // Attempt to replace the node with the new node.
+                // Attempt to advance the sequence.
                 // There is one reason why this might fail:
                 // 1. Another thread has already dequeued the item in this slot.
-                if (newSlotRef.compare_exchange_strong(node.sequence, newNode, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                if (sequenceRef.compare_exchange_strong(node.sequence, newSequence, std::memory_order_acq_rel, std::memory_order_acquire)) {
                     head_.compare_exchange_weak(slotIndex, slotIndex + 1, std::memory_order_relaxed, std::memory_order_relaxed);
                     return node.value;
                 }

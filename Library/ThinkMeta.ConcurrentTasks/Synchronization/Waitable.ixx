@@ -27,10 +27,19 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// <typeparam name="T">
     /// The primitive built on it; provides a public bool TryWait() (non-blocking, may consume the
     /// signal) and a Resume() that resumes the suspended task(s) the passed TryWait stands for.
+    /// A T whose condition stays observable after a resume (a manual-reset event, a task group's
+    /// count) declares <c>static constexpr bool WaitRechecks = true</c>: its Wait then checks
+    /// TryWait() again after every resume and suspends again if the condition no longer holds. A T
+    /// whose resume hands the signal to the resumed task (an auto-reset event, a semaphore) does
+    /// not, since its TryWait() would find nothing after a legitimate resume.
     /// </typeparam>
     /// <remarks>
     /// Wait tries <typeparamref name="T"/>::TryWait() first and suspends only if that fails; when a
     /// task suspends, TryWait() is checked again and T::Resume() is called if it now succeeds.
+    /// That re-check resumes every task suspended at that moment, so with
+    /// <see cref="SuspensionKind::Multiple"/> a task can be resumed although the condition was
+    /// taken back meanwhile (a Reset between a Set and the re-check); a T with WaitRechecks
+    /// absorbs that by waiting again.
     /// Wait must be called from a task or from an OS thread converted with
     /// <see cref="ConvertThreadToTask"/>; it suspends the caller if TryWait fails. For
     /// <see cref="SuspensionKind::Single"/>, at most one task may wait at a time.
@@ -43,12 +52,16 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         /// <summary>Waits until the primitive lets the calling task pass.</summary>
         /// <remarks>
         /// Returns at once if <typeparamref name="T"/>::TryWait() succeeds, otherwise suspends the
-        /// calling task until a resumer lets it pass. Task or converted thread only; no timeout.
+        /// calling task until a resumer lets it pass (and, with WaitRechecks, until TryWait() holds
+        /// after the resume). Task or converted thread only; no timeout.
         /// </remarks>
         void Wait(this auto& self) noexcept
         {
-            if (!self.TryWait())
+            while (!self.TryWait()) {
                 self.Suspend();
+                if constexpr (!Rechecks)
+                    break;
+            }
         }
 
         /// <summary>Waits with a time limit.</summary>
@@ -69,6 +82,10 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         }
 
     private:
+        // Whether T declares WaitRechecks as true (see the class remarks). A Single primitive claims
+        // its one waiter with an exchange, so it is never resumed without its condition.
+        static constexpr bool Rechecks = _SuspensionKind == SuspensionKind::Multiple && requires { requires T::WaitRechecks; };
+
         // Called by Suspendable::OnSuspended after the task was published: a signal that came
         // between the failed TryWait in Wait and the publication would otherwise be missed.
         // If TryWait consumes a signal here (AutoResetEvent) and the published task was already
@@ -86,7 +103,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         friend Suspendable<_SuspensionKind, Waitable<_SuspensionKind, T>>;
     };
 
-    /// <summary>Matches types that provide the waitable task interface.</summary>
+    /// <summary>Matches types that provide the waitable interface.</summary>
     /// <typeparam name="T">The candidate type.</typeparam>
     export template <typename T>
     concept WaitableType = requires(T& w) {
@@ -100,4 +117,4 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     concept TimedWaitableType = WaitableType<T> && requires(T& w, Duration timeout) {
         { w.Wait(timeout) } noexcept -> std::same_as<bool>;
     };
-} // namespace ThinkMeta::ConcurrentTasks
+} // namespace ThinkMeta::ConcurrentTasks::Synchronization

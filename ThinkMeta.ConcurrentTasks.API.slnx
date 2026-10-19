@@ -71,6 +71,36 @@
     <Project Path="Samples/Docs/Timeout/ThinkMeta.ConcurrentTasks.Samples.Docs.Timeout.vcxproj" Id="cbb16ba1-d275-4c47-9fd7-6fc1f93731ab">
       <Platform Project="x64" />
     </Project>
+    <Project Path="Samples/Docs/Tutorial01Sequential/ThinkMeta.ConcurrentTasks.Samples.Docs.Tutorial01Sequential.vcxproj" Id="954057ea-37fc-4822-b73e-0dddbf6a319f">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/Tutorial02Scheduler/ThinkMeta.ConcurrentTasks.Samples.Docs.Tutorial02Scheduler.vcxproj" Id="80c2257f-a45d-40ce-9a70-5c2cfbbe74cb">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/Tutorial03ForkJoin/ThinkMeta.ConcurrentTasks.Samples.Docs.Tutorial03ForkJoin.vcxproj" Id="5c17fc08-01dc-46db-8830-c3c46aab91f2">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/Tutorial04Sizing/ThinkMeta.ConcurrentTasks.Samples.Docs.Tutorial04Sizing.vcxproj" Id="4a439925-a791-480b-9829-e5dce31636ca">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/Tutorial05AsyncRead/ThinkMeta.ConcurrentTasks.Samples.Docs.Tutorial05AsyncRead.vcxproj" Id="0aebbe22-19f6-4989-b0a2-ee723afb0e8f">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/Tutorial06Pipeline/ThinkMeta.ConcurrentTasks.Samples.Docs.Tutorial06Pipeline.vcxproj" Id="f1dcf651-2dc7-482d-9e49-738a7e2a2372">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/Tutorial07SerialState/ThinkMeta.ConcurrentTasks.Samples.Docs.Tutorial07SerialState.vcxproj" Id="5ef9916e-337c-4e9d-a168-bdf55c75828b">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/Tutorial08Priorities/ThinkMeta.ConcurrentTasks.Samples.Docs.Tutorial08Priorities.vcxproj" Id="d0aec4aa-724e-436d-86c8-15bfe031a980">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/Tutorial09Shutdown/ThinkMeta.ConcurrentTasks.Samples.Docs.Tutorial09Shutdown.vcxproj" Id="3d453078-9443-4067-b167-ef51f3068e41">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/Tutorial10ReadyMade/ThinkMeta.ConcurrentTasks.Samples.Docs.Tutorial10ReadyMade.vcxproj" Id="b30eb5b9-d9ed-4895-ad75-0d768ede1d08">
+      <Platform Project="x64" />
+    </Project>
     <Project Path="Samples/Docs/WaitForAGroup/ThinkMeta.ConcurrentTasks.Samples.Docs.WaitForAGroup.vcxproj" Id="5aacfca2-1d75-479b-98ed-d8bada75af6d">
       <Platform Project="x64" />
     </Project>

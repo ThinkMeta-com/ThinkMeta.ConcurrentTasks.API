@@ -128,7 +128,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
         std::vector<HANDLE> threadHandles;
         std::mutex          mutex;
 
-        static void ThreadCallback([[maybe_unused]] ITaskScheduler* scheduler, DWORD threadIndex, HANDLE thread, void* context, ThreadCallbackReason reason) noexcept
+        static void ThreadCallback([[maybe_unused]] ITaskScheduler* scheduler, std::uint32_t threadIndex, HANDLE thread, void* context, ThreadCallbackReason reason) noexcept
         {
             auto* tracker = static_cast<SchedulerThreadTracker*>(context);
             if (reason == ThreadCallbackReason::Starting) {

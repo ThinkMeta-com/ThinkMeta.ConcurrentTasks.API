@@ -67,8 +67,7 @@ int main()
 
         auto demo = Task::Create([&] {
             // [wait-timeout]
-            // 1. Nobody sets the event: the wait ends after the timeout and returns
-            // false.
+            // 1. Nobody sets the event: the wait times out and returns false.
             auto start = Clock::now();
             timedOut   = !event.Wait(Duration::Milliseconds(50));
             std::printf("Wait without Set: %s after %lld ms\n",
@@ -78,9 +77,8 @@ int main()
 
             // [timed-start]
             // 2. A task started by time sets the event after 100 ms; the wait with
-            // a 1 s limit
-            //    returns true as soon as it does. Schedule with a delay must be
-            //    called from a task and fails only without EnableTimers.
+            // a 1 s limit returns true as soon as it does. Schedule with a delay
+            // must be called from a task and fails only without EnableTimers.
             start = Clock::now();
             if (setter.Schedule(TaskPriority::Default, Duration::Milliseconds(100)))
                 signaled = event.Wait(Duration::Seconds(1));

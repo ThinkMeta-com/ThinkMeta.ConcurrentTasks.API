@@ -18,6 +18,7 @@ module;
 #include <ws2ipdef.h>
 
 #include <concepts>
+#include <cstdint>
 
 #include "Defs.h"
 
@@ -66,7 +67,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         Socket(const Socket&)                  = delete;
         const Socket& operator=(const Socket&) = delete;
 
-        static const int OptionLevel = SOL_SOCKET;
+        static constexpr int OptionLevel = SOL_SOCKET;
 
     protected:
         // The Winsock extension functions, loaded once per process by Startup (null before that, so
@@ -192,7 +193,6 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         {
             CT_ASSERT(!IsValid());
 
-            Close();
             socket_ = WSASocket(addressFamily, type, protocol, protocolInfo, g, flags);
 
             return IsValid() ? WinsockError::Success : WinsockError::GetLastError();
@@ -210,12 +210,17 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         WinsockErrorCode Close() noexcept
         {
             if (IsValid()) {
-                int error = closesocket(socket_);
-                socket_   = InvalidSocket;
+                // The socket is given up only when closesocket took it: with SO_LINGER and a
+                // non-blocking socket it answers WSAEWOULDBLOCK and the socket stays open, so the
+                // caller keeps the handle and may close it again (or wait and retry).
+                if (closesocket(socket_) == 0) {
+                    socket_ = InvalidSocket;
+                    return WinsockError::Success;
+                }
 
-                CT_ASSERT(!error);
-
-                return WinsockError::GetError(error);
+                const auto error = WinsockError::GetLastError();
+                CT_ASSERT(error == WSAEWOULDBLOCK);
+                return error;
             }
 
             return WinsockError::Success;
@@ -336,7 +341,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         {
             CT_ASSERT(IsValid());
             CT_ASSERT(addr);
-            CT_ASSERT(!sendBuffer || sendBuffer && bytesSent);
+            CT_ASSERT(!sendBuffer || bytesSent);
 
             auto success = ConnectEx(socket_, addr, addrSize, sendBuffer, sendDataLength, bytesSent, &overlapped);
 
@@ -445,8 +450,9 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         template <>
         WinsockErrorCode GetOption<bool>(int level, int optionName, bool* optionValue) noexcept
         {
-            DWORD            dwOptionValue;
-            WinsockErrorCode error = GetOption(level, optionName, &dwOptionValue);
+            // zero-initialized: some options return fewer than sizeof(DWORD) bytes
+            DWORD            dwOptionValue = 0;
+            WinsockErrorCode error         = GetOption(level, optionName, &dwOptionValue);
             if (WinsockError::Succeeded(error))
                 *optionValue = (dwOptionValue != 0);
             return error;
@@ -748,7 +754,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <summary>Gets and clears the socket's pending error (<c>SO_ERROR</c>).</summary>
         /// <param name="error">Required. Receives the pending WSA error code, <c>0</c> if there is none.</param>
         /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>getsockopt</c>.</returns>
-        WinsockErrorCode GetOptionError(DWORD* error) noexcept
+        WinsockErrorCode GetOptionError(WinsockErrorCode* error) noexcept
         {
             return GetOption(OptionLevel, SO_ERROR, error);
         }
@@ -1004,7 +1010,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <summary>Gets the socket type (<c>SOCK_STREAM</c>, <c>SOCK_DGRAM</c>, ...) (<c>SO_TYPE</c>).</summary>
         /// <param name="socketType">Required. Receives the socket type.</param>
         /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>getsockopt</c>.</returns>
-        WinsockErrorCode GetOptionType(DWORD* socketType) noexcept
+        WinsockErrorCode GetOptionType(int* socketType) noexcept
         {
             return GetOption(OptionLevel, SO_TYPE, socketType);
         }
@@ -1056,7 +1062,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <c>TRUE</c> blocks the calling thread until the operation has completed; <c>FALSE</c> returns
         /// <c>WSA_IO_INCOMPLETE</c> while pending.
         /// </param>
-        /// <param name="flags">Receives the operation's result flags.</param>
+        /// <param name="flags">Receives the operation's result flags; <c>nullptr</c> if they are not wanted.</param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::Incomplete"/> (still pending,
         /// <paramref name="wait"/> <c>FALSE</c>) or the operation's error.
@@ -1065,7 +1071,9 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         {
             CT_ASSERT(IsValid());
             CT_ASSERT(bytesTransferred);
-            return WinsockError::GetAsyncError(WSAGetOverlappedResult(socket_, &overlapped, bytesTransferred, wait, flags));
+            // WSAGetOverlappedResult faults on a null flags pointer
+            DWORD unusedFlags;
+            return WinsockError::GetAsyncError(WSAGetOverlappedResult(socket_, &overlapped, bytesTransferred, wait, flags ? flags : &unusedFlags));
         }
 
         /// <summary>Starts an overlapped <c>WSAIoctl</c> (raw <c>OVERLAPPED</c> form).</summary>
@@ -1794,8 +1802,6 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         SOCKET GetSocket() const noexcept { return socket_; }
 
     private:
-        explicit Socket(SOCKET socket) noexcept : socket_(socket) {}
-
         static constexpr SOCKET InvalidSocket = INVALID_SOCKET;
 
         SOCKET socket_;

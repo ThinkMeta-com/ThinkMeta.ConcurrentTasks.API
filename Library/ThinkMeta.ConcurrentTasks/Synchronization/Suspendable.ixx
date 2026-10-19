@@ -46,7 +46,10 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     {
     private:
         // ISuspendCallback: push first, then re-check (see SuspendableBase<Single>::SetSuspendedTask
-        // for the ordering argument; here the push is an SList interlocked operation).
+        // for the ordering argument; here the push is an SList interlocked operation). The re-check
+        // reads the object after the task was published, when a resumer may already have let the
+        // task pass: the object must still be alive then, which is why a Multiple object may not be
+        // destroyed right after a wait (TaskGroup covers this case with its notification count).
         void OnSuspended(SuspendedTask suspendedTask) noexcept override
         {
             AddSuspendedTask(suspendedTask);

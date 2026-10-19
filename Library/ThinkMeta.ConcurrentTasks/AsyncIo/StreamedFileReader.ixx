@@ -25,6 +25,7 @@ export module ThinkMeta.ConcurrentTasks.AsyncIo.StreamedFileReader;
 
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncFile;
 import ThinkMeta.ConcurrentTasks.Synchronization.AutoResetEvent;
+import ThinkMeta.ConcurrentTasks.Synchronization.Semaphore;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Windows.Error;
 
@@ -33,7 +34,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// <summary>How a <see cref="StreamedFileReader"/> reads: granule, how far ahead, how many reads at once.</summary>
     /// <remarks>
     /// <see cref="StreamedFileReader::Open"/> corrects out-of-range values instead of failing: <see cref="segmentSize"/> is
-    /// raised to at least 64 KB and rounded up to a multiple of 64 KB, <see cref="readAhead"/> is raised to at least one
+    /// raised to at least 64 KB, rounded up to a multiple of 64 KB and limited to
+    /// <see cref="StreamedFileReader::MaxSegmentSize"/>, <see cref="readAhead"/> is raised to at least one
     /// segment, <see cref="readsInFlight"/> is clamped to 1..<see cref="StreamedFileReader::MaxReadsInFlight"/>.
     /// </remarks>
     export struct StreamedFileReaderSettings {
@@ -77,7 +79,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// <see cref="EnableAsyncIo"/>. The file is read in rising offset order; loaded only grows. Wait suspends
     /// the calling task (an OS thread must have called <see cref="ConvertThreadToTask"/>). Errors: Open returns
     /// a Win32 error code; a read error is kept in <see cref="ReadError"/> and does not stop the stream - Wait
-    /// still returns, the affected bytes read as zero, so consumers must check ReadError. Destroy
+    /// still returns, the affected bytes read as zero, so consumers must check ReadError. Only a failed
+    /// commit (out of memory) stops the stream like <see cref="Stop"/>: Wait then returns less than asked. Destroy
     /// the object only after the reader task has ended (Run has returned).
     /// </para>
     /// </remarks>
@@ -95,7 +98,11 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         static constexpr std::uint32_t MaxUsers = 8;
 
         /// <summary>Sector size the last unbuffered read is rounded up to.</summary>
-        static constexpr std::uint64_t SectorAlign = 4096;
+        static constexpr std::uint64_t SectorAlign = BulkIoOptions::SectorAlign;
+
+        /// <summary>Upper bound of <see cref="StreamedFileReaderSettings::segmentSize"/> (1 GB).</summary>
+        /// <remarks>One read transfers at most 4 GB.</remarks>
+        static constexpr std::uint64_t MaxSegmentSize = std::uint64_t{1} << 30;
 
         /// <summary>Creates a reader with no file.</summary>
         /// <remarks>Call <see cref="Open"/> before scheduling it.</remarks>
@@ -134,7 +141,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                 settings_.readsInFlight = settings_.readsInFlight == 0 ? 1 : MaxReadsInFlight;
             if (settings_.segmentSize < 65536)
                 settings_.segmentSize = 65536;
-            settings_.segmentSize = RoundUp(settings_.segmentSize, 65536);
+            settings_.segmentSize = settings_.segmentSize > MaxSegmentSize ? MaxSegmentSize : RoundUp(settings_.segmentSize, 65536);
             if (settings_.readAhead < settings_.segmentSize)
                 settings_.readAhead = settings_.segmentSize;
             for (std::uint32_t i = 0; i < MaxUsers; ++i)
@@ -167,7 +174,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <summary>Waits until the bytes before <paramref name="end"/> are loaded.</summary>
         /// <param name="end">File offset in bytes up to which the data is needed; clamped to <see cref="Size"/>.</param>
         /// <returns>
-        /// How far the file is loaded: at least end, less only when the reader was stopped before (<see cref="Stop"/>).
+        /// How far the file is loaded: at least end, less only when the reader was stopped before (<see cref="Stop"/>,
+        /// or a failed commit, see <see cref="ReadError"/>).
         /// </returns>
         /// <remarks>
         /// end is clamped to <see cref="Size"/>. Returns at once if the bytes are loaded; otherwise asks the
@@ -189,14 +197,24 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             while (r < end && !requested_.compare_exchange_weak(r, end, std::memory_order_seq_cst)) {
             }
             readerWake_.Set();
+            // Every waiter gets its own permit per completion (the reader releases one for each
+            // waiter it sees announced), so a waiter that is not satisfied yet does not take the
+            // news away from one that is: with one shared auto-reset event the most recent waiter
+            // was woken first every time and starved the others until it was satisfied itself.
+            // Announce, then look again: the reader stores the new position and then counts the
+            // announced waiters (both seq_cst), so either it sees this waiter and leaves a permit
+            // or this re-check sees the new position.
             for (;;) {
-                const bool finished = finished_.load(std::memory_order_acquire);
-                loaded              = loaded_.load(std::memory_order_acquire);
-                if (loaded >= end || finished)
+                if (IsLoaded(end, loaded))
                     break;
-                loadedEvent_.Wait();
+                waiting_.fetch_add(1, std::memory_order_seq_cst);
+                if (IsLoaded(end, loaded)) {
+                    waiting_.fetch_sub(1, std::memory_order_relaxed);
+                    break;
+                }
+                loadedSignal_.Wait();
+                waiting_.fetch_sub(1, std::memory_order_relaxed);
             }
-            loadedEvent_.Set(); // other waiters may need the same news
             waited_.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count()),
                               std::memory_order_relaxed);
             return loaded;
@@ -219,26 +237,32 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             if (user >= MaxUsers)
                 return;
             lows_[user].store(below, std::memory_order_release);
-            std::uint64_t low = ~std::uint64_t{0};
-            for (const auto& l : lows_) {
-                const auto v = l.load(std::memory_order_acquire);
-                if (v < low)
-                    low = v;
+            std::uint64_t low = ReleasableLow();
+            // One caller decommits at a time. A caller that finds the lock taken leaves its position
+            // to the holder, which looks again before it leaves; so the higher of two concurrent
+            // releases is not lost (it was: the last release of a user could leave its memory
+            // committed until the destructor).
+            for (;;) {
+                if (low <= released_.load(std::memory_order_acquire))
+                    return;
+                if (releasing_.exchange(true, std::memory_order_seq_cst)) {
+                    releasePending_.store(true, std::memory_order_seq_cst);
+                    if (releasing_.load(std::memory_order_seq_cst))
+                        return; // the holder sees the flag when it leaves
+                    continue;   // it left in between and may have missed the flag: do it here
+                }
+                const auto from = released_.load(std::memory_order_relaxed);
+                if (low > from) {
+                    VirtualFree(base_ + from, static_cast<std::size_t>(low - from), MEM_DECOMMIT);
+                    released_.store(low, std::memory_order_seq_cst);
+                    readerWake_.Set();
+                }
+                releasing_.store(false, std::memory_order_seq_cst);
+                if (!releasePending_.exchange(false, std::memory_order_seq_cst))
+                    return;
+                // somebody released more while this ran: their position may be above low
+                low = ReleasableLow();
             }
-            const auto loaded = loaded_.load(std::memory_order_acquire);
-            if (low > loaded)
-                low = loaded;
-            low = low / settings_.segmentSize * settings_.segmentSize;
-            // one caller decommits at a time; a caller that finds the lock taken leaves it to the next release
-            if (low <= released_.load(std::memory_order_acquire) || releasing_.exchange(true, std::memory_order_acquire))
-                return;
-            const auto from = released_.load(std::memory_order_relaxed);
-            if (low > from) {
-                VirtualFree(base_ + from, static_cast<std::size_t>(low - from), MEM_DECOMMIT);
-                released_.store(low, std::memory_order_seq_cst);
-                readerWake_.Set();
-            }
-            releasing_.store(false, std::memory_order_release);
         }
 
         /// <summary>Stops the reader.</summary>
@@ -277,6 +301,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// while it waits for the oldest read. Reads complete in any order on the I/O thread but
         /// are accounted in issue order, so loaded grows contiguously. A read error (or a short
         /// read: <c>ERROR_HANDLE_EOF</c>) is recorded once (<see cref="ReadError"/>); later segments are committed but not read.
+        /// A failed commit is recorded too and stops the reader: nothing from that segment on is loaded.
         /// Closes the file before it ends.
         /// </remarks>
         void Run() noexcept override
@@ -287,27 +312,34 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             std::uint64_t       issued    = 0;
             std::uint64_t       completed = 0;
             Windows::ErrorCode  error     = Windows::Error::Success;
+            bool                commitFailed = false;
 
             while (loaded < size_) {
-                const bool stop = stop_.load(std::memory_order_seq_cst);
+                const bool stop = commitFailed || stop_.load(std::memory_order_seq_cst);
                 if (!stop) {
                     std::uint64_t allowed = released_.load(std::memory_order_seq_cst) + settings_.readAhead;
                     const auto    asked   = requested_.load(std::memory_order_seq_cst);
                     if (asked > allowed)
                         allowed = asked;
                     while (issued - completed < settings_.readsInFlight && issuedTo < size_ && issuedTo < allowed) {
+                        // without memory the bytes cannot even read as zero: stop like Stop() (Wait then
+                        // returns less than asked) instead of publishing an uncommitted segment
+                        if (VirtualAlloc(base_ + issuedTo, static_cast<std::size_t>(segment), MEM_COMMIT, PAGE_READWRITE) == nullptr) {
+                            if (Windows::Error::Succeeded(error)) {
+                                error = Windows::Error::GetLastError();
+                                error_.store(error, std::memory_order_relaxed);
+                            }
+                            commitFailed = true;
+                            break;
+                        }
                         const auto slot = static_cast<std::uint32_t>(issued % settings_.readsInFlight);
                         auto&      req  = requests_[slot];
                         bytes_[slot]    = size_ - issuedTo < segment ? size_ - issuedTo : segment;
                         req.Reset();
                         req.SetOffset(issuedTo);
-                        Windows::ErrorCode result = VirtualAlloc(base_ + issuedTo, static_cast<std::size_t>(segment), MEM_COMMIT, PAGE_READWRITE) != nullptr
-                                                        ? Windows::Error::Success
-                                                        : Windows::Error::GetLastError();
                         // unbuffered: whole sectors (the segment is committed whole; the read ends at the end of the file)
                         const std::uint64_t request = settings_.unbuffered ? RoundUp(bytes_[slot], SectorAlign) : bytes_[slot];
-                        if (Windows::Error::Succeeded(result))
-                            result = Windows::Error::Succeeded(error) ? file_.ReadAsync(base_ + issuedTo, static_cast<DWORD>(request), req) : error;
+                        Windows::ErrorCode  result  = Windows::Error::Succeeded(error) ? file_.ReadAsync(base_ + issuedTo, static_cast<DWORD>(request), req) : error;
                         if (Windows::Error::Failed(result) && !Windows::Error::IsPending(result))
                             req.RequestCompleted(result, 0);
                         issuedTo += bytes_[slot];
@@ -332,18 +364,48 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                 }
                 loaded += bytes_[slot];
                 ++completed;
-                loaded_.store(loaded, std::memory_order_release);
-                loadedEvent_.Set();
+                loaded_.store(loaded, std::memory_order_seq_cst);
+                SignalWaiters();
             }
             file_.Close();
             // a waiter that asked for more than the reader got to (after Stop) is let go with what there is
-            loaded_.store(size_ < loaded ? size_ : loaded, std::memory_order_release);
-            finished_.store(true, std::memory_order_release);
-            loadedEvent_.Set();
+            finished_.store(true, std::memory_order_seq_cst);
+            SignalWaiters();
         }
 
     private:
         static std::uint64_t RoundUp(std::uint64_t n, std::uint64_t granule) noexcept { return (n + granule - 1) / granule * granule; }
+
+        // the lowest position of all users, capped at what is loaded, down to a whole segment:
+        // everything below it may be decommitted
+        std::uint64_t ReleasableLow() const noexcept
+        {
+            std::uint64_t low = ~std::uint64_t{0};
+            for (const auto& l : lows_) {
+                const auto v = l.load(std::memory_order_acquire);
+                if (v < low)
+                    low = v;
+            }
+            const auto loaded = loaded_.load(std::memory_order_acquire);
+            if (low > loaded)
+                low = loaded;
+            return low / settings_.segmentSize * settings_.segmentSize;
+        }
+
+        // whether a Wait(end) may return; loaded receives the loaded position
+        bool IsLoaded(std::uint64_t end, std::uint64_t& loaded) noexcept
+        {
+            const bool finished = finished_.load(std::memory_order_seq_cst);
+            loaded              = loaded_.load(std::memory_order_seq_cst);
+            return loaded >= end || finished;
+        }
+
+        // one permit per announced waiter; after the position was stored (see Wait)
+        void SignalWaiters() noexcept
+        {
+            if (const auto waiting = waiting_.load(std::memory_order_seq_cst))
+                loadedSignal_.Release(waiting);
+        }
 
         StreamedFileReaderSettings settings_;
         AsyncFile                  file_;
@@ -354,19 +416,23 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         std::atomic<std::uint64_t>      requested_{0};
         std::atomic<std::uint64_t>      released_{0};
         std::atomic<bool>               releasing_{false};
+        std::atomic<bool>               releasePending_{false};
         std::atomic<bool>               stop_{false};
         std::atomic<bool>               finished_{false};
         std::atomic<Windows::ErrorCode> error_{Windows::Error::Success};
         std::atomic<std::uint64_t>      waited_{0};
         std::atomic<std::uint64_t>      lows_[MaxUsers] = {};
+        std::atomic<std::uint32_t>      waiting_{0}; // waiters announced for the next completion
 
         Synchronization::AutoResetEvent readerWake_;
-        Synchronization::AutoResetEvent loadedEvent_;
+        Synchronization::Semaphore      loadedSignal_{0}; // one permit per announced waiter and completion
 
         // reader task
         std::uint64_t                peakWindow_ = 0;
         std::uint64_t                bytes_[MaxReadsInFlight] = {};
-        WaitableAsyncFileIoRequest   requests_[MaxReadsInFlight];
+        // _s: the reader task is the only waiter and reuses a request right after its Wait, which
+        // the single-waiter event allows (the completion's Set is its last access to the request)
+        WaitableAsyncFileIoRequest_s requests_[MaxReadsInFlight];
     };
 
 } // namespace ThinkMeta::ConcurrentTasks::AsyncIo

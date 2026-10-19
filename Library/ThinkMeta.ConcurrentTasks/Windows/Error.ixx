@@ -46,8 +46,17 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         static constexpr Type NotFound          = ERROR_NOT_FOUND;
         static constexpr Type OperationAborted  = ERROR_OPERATION_ABORTED;
 
-        /// <summary><c>ERROR_TIMEOUT</c>: a wait or operation with a timeout ran out of time.</summary>
+        /// <summary><c>ERROR_TIMEOUT</c>: an operation with a timeout ran out of time.</summary>
+        /// <remarks>
+        /// Reported by the library's own timed operations (<see cref="AsyncIo::AsyncFile::Read"/>, say).
+        /// <see cref="IoCompletionPort::GetQueuedCompletionStatus"/> reports its timeout as
+        /// <see cref="WaitTimedOut"/> (<c>WAIT_TIMEOUT</c>, 258) instead; <see cref="Thread::Wait"/>
+        /// returns <see cref="Success"/> and passes <c>WAIT_TIMEOUT</c> in its wait result.
+        /// </remarks>
         static constexpr Type TimedOut = ERROR_TIMEOUT;
+
+        /// <summary><c>WAIT_TIMEOUT</c>: a Win32 wait ran out of time (see <see cref="TimedOut"/>).</summary>
+        static constexpr Type WaitTimedOut = WAIT_TIMEOUT;
 
         /// <summary>Returns the calling thread's last Win32 error (<c>::GetLastError</c>).</summary>
         /// <returns>The thread's last Win32 error code; <see cref="Success"/> if none was set.</returns>
@@ -66,19 +75,19 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <param name="error">A Win32 error code.</param>
         /// <returns><c>true</c> if <paramref name="error"/> is <see cref="Success"/>; otherwise <c>false</c>.</returns>
         /// <seealso cref="Failed"/>
-        static bool Succeeded(const Type& error) noexcept { return error == Success; }
+        static constexpr bool Succeeded(Type error) noexcept { return error == Success; }
 
         /// <summary>Returns whether <paramref name="error"/> is anything but <see cref="Success"/>.</summary>
         /// <param name="error">A Win32 error code.</param>
         /// <returns><c>true</c> for every code other than <see cref="Success"/>; otherwise <c>false</c>.</returns>
         /// <remarks><see cref="Pending"/> counts as failed.</remarks>
         /// <seealso cref="Succeeded"/>
-        static bool Failed(const Type& error) noexcept { return !Succeeded(error); }
+        static constexpr bool Failed(Type error) noexcept { return !Succeeded(error); }
 
         /// <summary>Returns whether <paramref name="error"/> is <see cref="Pending"/>.</summary>
         /// <param name="error">A Win32 error code.</param>
         /// <returns><c>true</c> if <paramref name="error"/> is <c>ERROR_IO_PENDING</c>; otherwise <c>false</c>.</returns>
-        static bool IsPending(const Type& error) noexcept { return error == Pending; }
+        static constexpr bool IsPending(Type error) noexcept { return error == Pending; }
 
         /// <summary>Returns whether <paramref name="error"/> means too many overlapped requests.</summary>
         /// <param name="error">A Win32 error code.</param>
@@ -90,12 +99,12 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// These are the codes Windows uses when too many overlapped requests are outstanding
         /// (<c>ERROR_INVALID_USER_BUFFER</c>, <c>ERROR_NOT_ENOUGH_MEMORY</c>): retry later.
         /// </remarks>
-        static bool TooManyAsynchronousRequests(const Type& error) noexcept { return error == InvalidUserBuffer || error == NotEnoughMemory; }
+        static constexpr bool TooManyAsynchronousRequests(Type error) noexcept { return error == InvalidUserBuffer || error == NotEnoughMemory; }
 
         /// <summary>Returns whether <paramref name="error"/> is <see cref="EndOfStream"/>.</summary>
         /// <param name="error">A Win32 error code.</param>
         /// <returns><c>true</c> if <paramref name="error"/> is <c>ERROR_HANDLE_EOF</c>; otherwise <c>false</c>.</returns>
-        static bool IsEndOfStream(const Type& error) noexcept { return error == EndOfStream; }
+        static constexpr bool IsEndOfStream(Type error) noexcept { return error == EndOfStream; }
     };
 
     /// <summary>A Win32 error code as returned by the Windows wrappers.</summary>
@@ -103,45 +112,63 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
     /// <seealso cref="Error"/>
     export using ErrorCode = Error::Type;
 
-    /// <summary>Carries a Win32 error out of code that has no error return.</summary>
+    /// <summary>Carries an error code out of code that has no error return.</summary>
+    /// <typeparam name="_Error">
+    /// The error helper that names the codes: <see cref="Error"/> (Win32) or <see cref="WinsockError"/> (Winsock).
+    /// </typeparam>
     /// <remarks>
     /// With C++ exceptions enabled <see cref="Throw"/> throws it; without them (<c>/EHs-</c> etc., as
     /// in the CRT-free core) Throw ends the process.
     /// In code that cannot pass exceptions on (noexcept functions, such as most of the library)
     /// <see cref="ThrowIfFailed"/> ends the process: there it is a fail-fast check.
     /// </remarks>
-    export class ErrorException
+    /// <seealso cref="ErrorException"/>
+    /// <seealso cref="WinsockErrorException"/>
+    export template <typename _Error>
+    class _ErrorException
     {
     public:
+        /// <summary>The error code type the exception carries.</summary>
+        using Code = typename _Error::Type;
+
         /// <summary>Constructs the exception for <paramref name="errorCode"/>.</summary>
-        /// <param name="errorCode">The Win32 error code to carry; normally not <see cref="Error::Success"/>.</param>
-        explicit ErrorException(ErrorCode errorCode) noexcept : errorCode_{errorCode} {}
+        /// <param name="errorCode">The error code to carry; normally a failure code.</param>
+        explicit _ErrorException(Code errorCode) noexcept : errorCode_{errorCode} {}
 
-        /// <summary>Returns the Win32 error code the exception carries.</summary>
+        /// <summary>Returns the error code the exception carries.</summary>
         /// <returns>The code passed to the constructor.</returns>
-        ErrorCode GetErrorCode() const noexcept { return errorCode_; }
+        Code GetErrorCode() const noexcept { return errorCode_; }
 
-        /// <summary>Throws an <see cref="ErrorException"/> for <paramref name="errorCode"/>.</summary>
-        /// <param name="errorCode">The Win32 error code the exception carries.</param>
+        /// <summary>Throws the exception for <paramref name="errorCode"/>.</summary>
+        /// <param name="errorCode">The error code the exception carries.</param>
         /// <remarks>Built without exceptions, it ends the process instead.</remarks>
         /// <seealso cref="ThrowIfFailed"/>
 #ifdef _CPPUNWIND
-        [[noreturn]] static void Throw(ErrorCode errorCode) { throw ErrorException(errorCode); }
+        [[noreturn]] static void Throw(Code errorCode) { throw _ErrorException(errorCode); }
 #else
         // Built without exceptions, as the CRT-free core is: there is nothing to unwind, so a
         // failure the caller cannot be told about ends the process right here.
-        [[noreturn]] static void Throw([[maybe_unused]] ErrorCode errorCode) noexcept { __fastfail(FAST_FAIL_FATAL_APP_EXIT); }
+        [[noreturn]] static void Throw([[maybe_unused]] Code errorCode) noexcept { __fastfail(FAST_FAIL_FATAL_APP_EXIT); }
 #endif
 
-        /// <summary>Calls <see cref="Throw"/> unless the code is <see cref="Error::Success"/>.</summary>
-        /// <param name="errorCode">The Win32 error code to check.</param>
-        static void ThrowIfFailed(ErrorCode errorCode)
+        /// <summary>Calls <see cref="Throw"/> unless the code means success.</summary>
+        /// <param name="errorCode">The error code to check.</param>
+        /// <remarks>Built without exceptions, a failure ends the process instead.</remarks>
+#ifdef _CPPUNWIND
+        static void ThrowIfFailed(Code errorCode)
+#else
+        static void ThrowIfFailed(Code errorCode) noexcept
+#endif
         {
-            if (Error::Failed(errorCode))
+            if (_Error::Failed(errorCode))
                 Throw(errorCode);
         }
 
     private:
-        const ErrorCode errorCode_;
+        const Code errorCode_;
     };
+
+    /// <summary>Carries a Win32 error out of code that has no error return.</summary>
+    /// <remarks>See <see cref="_ErrorException"/>.</remarks>
+    export using ErrorException = _ErrorException<Error>;
 } // namespace ThinkMeta::ConcurrentTasks::Windows

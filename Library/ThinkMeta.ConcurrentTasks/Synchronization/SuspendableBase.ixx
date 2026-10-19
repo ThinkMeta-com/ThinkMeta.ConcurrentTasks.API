@@ -18,18 +18,10 @@ module;
 
 export module ThinkMeta.ConcurrentTasks.Synchronization.SuspendableBase;
 
-import ThinkMeta.ConcurrentTasks.Collections.BasicStack;
 import ThinkMeta.ConcurrentTasks.Collections.ConcurrentStack;
 import ThinkMeta.ConcurrentTasks.Cpp.Padded;
 
 namespace ThinkMeta::ConcurrentTasks::Synchronization {
-    // A stack of suspended task handles (ConcurrentStack or BasicStack of SuspendedTaskEntry).
-    template <typename T>
-    concept SuspendedTaskStack = requires(T a) {
-        { a.Push(static_cast<SuspendedTask>(nullptr)) } -> std::same_as<void>;
-        { a.Pop() } -> std::same_as<SuspendedTask>;
-    };
-
     /// <summary>How many tasks may be suspended on one synchronization object at the same time.</summary>
     /// <remarks>
     /// Every primitive comes in both variants: the plain name (<see cref="SuspensionKind::Multiple"/>)
@@ -83,7 +75,14 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         SuspendableBase() noexcept = default;
 
         /// <summary>Destroys the object.</summary>
-        /// <remarks>No task may be suspended on the object any more (asserted in Debug).</remarks>
+        /// <remarks>
+        /// No task may be suspended on the object any more (asserted in Debug), and no resume or
+        /// suspend callback may still be inside it: a waiter's own callback re-checks the object
+        /// after it published the task, and a signal that is stored before the list of waiters is
+        /// taken still takes that list after a waiter may have passed. The return of a wait alone
+        /// is therefore no licence to destroy a Multiple object; the Single ("_s") variants are
+        /// built for that.
+        /// </remarks>
         ~SuspendableBase() noexcept { CT_ASSERT(!IsSuspended()); }
 
         /// <summary>Suspends the calling task.</summary>
@@ -94,10 +93,24 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         void Suspend() noexcept { SuspendTask(this); }
 
         /// <summary>Resumes every suspended task.</summary>
-        /// <remarks>Covers the tasks suspended right now.</remarks>
+        /// <remarks>
+        /// Covers the tasks suspended right now, not those that suspend while they are resumed:
+        /// the list is taken in one operation, and the object is not touched again afterwards. So a
+        /// resumed task may suspend on the object again without being resumed a second time by
+        /// this call (a group reused for the next round, an event reset and waited for again).
+        /// </remarks>
         /// <seealso cref="ResumeNext"/>
-        /// <seealso cref="ResumeNonReentrant"/>
-        void Resume() noexcept { ResumeTasks(suspendedTasks_); }
+        void Resume() noexcept
+        {
+            // The flush is the last access to the object; from here on only the chain is used, and
+            // an item's Next is read before the item is resumed, since the core owns the entry then.
+            auto taskContext = suspendedTasks_.Flush();
+            while (taskContext) {
+                auto next = static_cast<SuspendedTask>(taskContext->Next);
+                ResumeTask(taskContext);
+                taskContext = next;
+            }
+        }
 
         /// <summary>Resumes one suspended task.</summary>
         /// <returns><c>true</c> if a task was resumed; <c>false</c> if there was none.</returns>
@@ -127,28 +140,14 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
             // scheduler thread) while this task is still finishing the hand-off,
             // leading to a data race on the non-atomic lockCount_ and a stale
             // lockingTaskContext_ that is never cleared (lost wake-up / hang).
-            tc.exchange(taskContext, std::memory_order_release);
+            // seq_cst: the owner change must also be ordered before the caller's next look at the
+            // waiters, against a locker that suspends meanwhile (free on x64).
+            tc.exchange(taskContext, std::memory_order_seq_cst);
 
             if (taskContext)
                 ResumeTask(taskContext);
 
             return taskContext != nullptr;
-        }
-
-        /// <summary>Resumes the tasks suspended right now, but not those that suspend meanwhile.</summary>
-        /// <remarks>
-        /// Like <see cref="Resume"/>, but first moves the suspended tasks to a local stack, so that
-        /// tasks which suspend again while the loop runs are not resumed by this call. Reverses
-        /// the order: the earliest suspended task is resumed first.
-        /// </remarks>
-        void ResumeNonReentrant() noexcept
-        {
-            Collections::BasicStack<SuspendedTaskEntry> stack;
-
-            while (auto taskContext = suspendedTasks_.Pop())
-                stack.Push(taskContext);
-
-            ResumeTasks(stack);
         }
 
         /// <summary>Tells whether any task is suspended.</summary>
@@ -168,15 +167,6 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         void AddSuspendedTask(SuspendedTask suspendedTask) noexcept { suspendedTasks_.Push(suspendedTask); }
 
     private:
-        template <SuspendedTaskStack Stack>
-        void ResumeTasks(Stack& stack) noexcept
-        {
-            // The object must outlive this loop: a resumed task may not destroy it while another
-            // thread still resumes (the users destroy it only once no Resume can run any more).
-            while (auto taskContext = stack.Pop())
-                ResumeTask(taskContext);
-        }
-
         Collections::ConcurrentStack<SuspendedTaskEntry> suspendedTasks_;
     };
 
@@ -232,21 +222,16 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
             // Atomically claim the suspended task so that two concurrent resumers
             // (e.g. a producer calling Set() and the suspending task's own scheduler
             // thread re-checking via TryResume()) can never both hand off the same
-            // TaskContext*, which would double-enqueue it and corrupt the scheduler.
+            // SuspendedTask, which would double-enqueue it and corrupt the scheduler.
             auto suspendedTask = suspendedTask_.exchange(nullptr, std::memory_order_acq_rel);
 
             if (suspendedTask) {
-                Resume(suspendedTask);
+                ResumeTask(suspendedTask);
                 return true;
             }
 
             return false;
         }
-
-        /// <summary>Resumes a task that the caller has already claimed.</summary>
-        /// <param name="suspendedTask">The claimed handle; <c>nullptr</c> is ignored.</param>
-        /// <remarks>Calls <see cref="ResumeTask"/>.</remarks>
-        static void Resume(SuspendedTask suspendedTask) noexcept { ResumeTask(suspendedTask); }
 
         /// <summary>Same as <see cref="Resume"/>().</summary>
         /// <returns><c>true</c> if a task was resumed; <c>false</c> if the slot was empty.</returns>
@@ -264,12 +249,9 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
             // Atomically claim the suspended task (see Resume() above).
             auto taskContext = suspendedTask_.exchange(nullptr, std::memory_order_acq_rel);
 
-            // Publish the ownership transfer BEFORE resuming the next task.
-            // Otherwise the resumed task could run concurrently (on another
-            // scheduler thread) while this task is still finishing the hand-off,
-            // leading to a data race on the non-atomic lockCount_ and a stale
-            // lockingTaskContext_ that is never cleared (lost wake-up / hang).
-            tc.exchange(taskContext, std::memory_order_release);
+            // Publish the ownership transfer BEFORE resuming the next task (see the Multiple
+            // variant's ResumeNext).
+            tc.exchange(taskContext, std::memory_order_seq_cst);
 
             if (taskContext)
                 ResumeTask(taskContext);
@@ -293,14 +275,14 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         {
             // Dekker-style pairing: this exchange comes before the caller's TryResume reads the
             // object's state; the signalling side writes its state (an RMW too) and then reads or
-            // claims the slot, so at least one side sees the other (no lost wake-up). This relies on
-            // both RMWs being full barriers, as lock-prefixed instructions are on x86; the C++ orders
-            // used here (release/acquire) do not by themselves exclude that both sides miss.
-            [[maybe_unused]] auto previous = suspendedTask_.exchange(suspendedTask, std::memory_order_release);
+            // claims the slot, so at least one side sees the other (no lost wake-up). seq_cst makes
+            // that hold in the C++ memory model too; on x64 it costs nothing, a lock-prefixed
+            // instruction is a full barrier anyway.
+            [[maybe_unused]] auto previous = suspendedTask_.exchange(suspendedTask, std::memory_order_seq_cst);
             CT_ASSERT(!previous);
         }
 
     private:
         Cpp::Padded<std::atomic<SuspendedTask>> suspendedTask_{nullptr};
     };
-} // namespace ThinkMeta::ConcurrentTasks
+} // namespace ThinkMeta::ConcurrentTasks::Synchronization

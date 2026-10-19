@@ -58,9 +58,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         void RequestCompleted(DWORD error, DWORD bytesTransferred) noexcept override
         {
             SetTransferredBytes(bytesTransferred);
-            // WSAGetLastError forwards to GetLastError, so the packet's error code is the
-            // Winsock error code as well.
-            SetError(error);
+            // A failed packet carries the Win32 form of the operation's NTSTATUS (ERROR_NETNAME_DELETED
+            // for a reset), not the WSAE* code a synchronous failure reports; the status in the
+            // OVERLAPPED gives the Winsock code back (see WinsockError::FromOverlapped).
+            SetError(Windows::WinsockError::FromOverlapped(GetOverlapped(), static_cast<Windows::WinsockErrorCode>(error)));
         }
 
     protected:
@@ -87,14 +88,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <summary>The result flags of the completed receive.</summary>
         /// <returns>The <c>MSG_*</c> result flags (e.g. <c>MSG_PARTIAL</c>); <c>0</c> if none were reported.</returns>
         /// <remarks>Valid after completion only.</remarks>
-        /// <seealso cref="SetFlags"/>
         DWORD GetFlags() const noexcept { return flags_; }
-
-        /// <summary>Stores the result flags.</summary>
-        /// <param name="flags">The <c>MSG_*</c> result flags of the receive.</param>
-        /// <remarks><see cref="AsyncSocket"/> sets them when a receive completes synchronously.</remarks>
-        /// <seealso cref="GetFlags"/>
-        void SetFlags(DWORD flags) noexcept { flags_ = flags; }
 
         /// <summary>Records the result and, on success, fetches the result flags.</summary>
         /// <param name="error">The operation's own Win32/WSA error code; <c>ERROR_SUCCESS</c> (<c>0</c>) on success.</param>
@@ -108,6 +102,14 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                 auto& overlapped = GetOverlapped();
                 WSAGetOverlappedResult(socket_, &overlapped, &bytesTransferred, false, &flags_);
             }
+        }
+
+        /// <summary>Re-arms the request for another receive.</summary>
+        /// <remarks>Only after the previous operation has completed; clears the result flags too.</remarks>
+        void Reset() noexcept override
+        {
+            AsyncSocketIoRequest::Reset();
+            flags_ = 0;
         }
 
     protected:
@@ -147,18 +149,20 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     class _WaitableAsyncSocketIoRequest : public _AsyncSocketIoRequest
     {
     public:
+        // own constructors instead of inheriting the base's: inherited ones would keep their
+        // protected access
+
         /// <summary>Creates an idle request.</summary>
-        /// <typeparam name="_Args">The types of the arguments passed on to the base request's constructor.</typeparam>
-        /// <param name="args">
-        /// Nothing for a plain request; for a receive request the <c>SOCKET</c> the operation runs on (used to
-        /// query the result flags).
-        /// </param>
-        /// <remarks>A receive request takes the socket the operation runs on.</remarks>
-        template <typename... _Args>
-        explicit _WaitableAsyncSocketIoRequest(_Args&&... args) noexcept : _AsyncSocketIoRequest(std::forward<_Args>(args)...)
+        _WaitableAsyncSocketIoRequest() noexcept
+            requires(!std::derived_from<_AsyncSocketIoRequest, AsyncSocketRecvIoRequest>)
+        = default;
+
+        /// <summary>Creates an idle receive request.</summary>
+        /// <param name="socket">The socket the operation runs on; used to query the result flags.</param>
+        explicit _WaitableAsyncSocketIoRequest(SOCKET socket) noexcept
+            requires std::derived_from<_AsyncSocketIoRequest, AsyncSocketRecvIoRequest>
+            : _AsyncSocketIoRequest(socket)
         {
-            // forwarding instead of inheriting the constructors: inherited constructors would keep
-            // the base's protected access
         }
 
         /// <summary>Records the result, then sets the event.</summary>

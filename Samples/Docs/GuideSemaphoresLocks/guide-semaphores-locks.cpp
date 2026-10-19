@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <span>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Synchronization.Semaphore;
@@ -17,6 +18,7 @@ import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using namespace TC::Synchronization;
+// [/names]
 
 struct Item {
     int id = 0;
@@ -61,8 +63,8 @@ class Downloader
 public:
     void Download(const Item& item) noexcept
     {
-        SemaphoreLock slot(
-            slots_); // Wait: suspends the task until a permit is free
+        // Wait: suspends the task until a permit is free
+        SemaphoreLock slot(slots_);
         Transfer(item);
     } // ~SemaphoreLock: Release of the permit
 
@@ -80,7 +82,8 @@ struct OrderBook {
     Semaphore_s ready; // count 0; one waiter: the consumer
 };
 
-// Producer side: any task or thread.
+// Producer side: one task or thread that publishes the orders in index order, so
+// that order i is in place when the consumer takes the i-th permit.
 void Publish(OrderBook& book, int index, const Order& order) noexcept
 {
     book.orders[index] = order;

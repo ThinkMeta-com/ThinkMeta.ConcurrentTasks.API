@@ -57,6 +57,10 @@ namespace ThinkMeta::ConcurrentTasks::Memory {
         /// <summary>Marks the end of the stream.</summary>
         /// <remarks>No more data follows; wakes a waiting consumer.</remarks>
         virtual void SetEndOfStream() noexcept = 0;
+
+    protected:
+        // not deleted through the interface
+        ~IWriteSequentialMemory() = default;
     };
 
     /// <summary>The consumer side of a sequential memory.</summary>
@@ -92,5 +96,9 @@ namespace ThinkMeta::ConcurrentTasks::Memory {
         /// </param>
         /// <remarks>The memory may then be reused or freed.</remarks>
         virtual void ReleaseReadMemory(std::size_t size) noexcept = 0;
+
+    protected:
+        // not deleted through the interface
+        ~IReadSequentialMemory() = default;
     };
 } // namespace ThinkMeta::ConcurrentTasks::Memory

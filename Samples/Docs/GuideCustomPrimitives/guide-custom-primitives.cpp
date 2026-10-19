@@ -8,12 +8,14 @@
 #include <cstdio>
 #include <span>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Synchronization.Waitable;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
+// [/names]
 
 // [mailbox]
 // Holds one int (0 means empty) for one waiting task. Put may be called from any
@@ -23,19 +25,19 @@ class Mailbox : private TC::ISuspendCallback
 public:
     void Put(int value) noexcept
     {
-        value_.store(value, std::memory_order_seq_cst); // 1. state
-        if (auto waiter
-            = waiter_.exchange(nullptr, std::memory_order_acq_rel)) // 2. waiter
-            TC::ResumeTask(waiter); // whoever takes the handle resumes
+        // 1. the state, 2. the waiter: whoever takes the handle resumes the task
+        value_.store(value, std::memory_order_seq_cst);
+        if (auto waiter = waiter_.exchange(nullptr, std::memory_order_acq_rel))
+            TC::ResumeTask(waiter);
     }
 
     // Task or converted thread only; at most one waiter at a time.
     int Take() noexcept
     {
         int value;
+        // SuspendTask calls OnSuspended once this task is off the processor.
         while ((value = value_.exchange(0, std::memory_order_acq_rel)) == 0)
-            TC::SuspendTask(
-                this); // calls OnSuspended once this task is off the processor
+            TC::SuspendTask(this);
         return value;
     }
 
@@ -53,11 +55,12 @@ private:
     // wait.
     void OnSuspended(TC::SuspendedTask task) noexcept override
     {
-        waiter_.store(task, std::memory_order_seq_cst);  // 1. publish the waiter
-        if (value_.load(std::memory_order_seq_cst) != 0) // 2. re-check the state:
-            if (auto waiter = waiter_.exchange(
-                    nullptr, std::memory_order_acq_rel)) // a Put may have
-                TC::ResumeTask(waiter);                  // missed the waiter
+        // 1. Publish the waiter. 2. Re-check the state: a Put may have missed the
+        // waiter, then whoever takes the handle back resumes the task.
+        waiter_.store(task, std::memory_order_seq_cst);
+        if (value_.load(std::memory_order_seq_cst) != 0)
+            if (auto waiter = waiter_.exchange(nullptr, std::memory_order_acq_rel))
+                TC::ResumeTask(waiter);
     }
 
     // Runs on the timer thread while the task is still suspended: take the handle
@@ -181,9 +184,9 @@ int main()
     std::printf("mailbox:  sum %lld\n", sum);
     ok = ok && sum == 2LL * 10'000 * 10'001 / 2;
 
-    int        value = 0;
-    const bool received
-        = replies.Take(value, TC::Duration::Milliseconds(30)); // nobody puts
+    int value = 0;
+    // nobody puts
+    const bool received = replies.Take(value, TC::Duration::Milliseconds(30));
     std::printf("timeout:  %s\n", received ? "received" : "timed out");
     ok = ok && !received;
 

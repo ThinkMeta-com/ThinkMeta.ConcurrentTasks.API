@@ -55,9 +55,9 @@ WinsockErrorCode SendAll(AsyncTcpSocket4& socket, const std::byte* data,
 class EchoTask : public TC::Tasks::Task
 {
 public:
-    AsyncTcpSocket4
-                socket; // moved in by the accept task before the task is started
-    std::size_t echoed = 0;
+    // moved in by the accept task before the task is started
+    AsyncTcpSocket4 socket;
+    std::size_t     echoed = 0;
 
     void Run() noexcept override
     {
@@ -209,9 +209,9 @@ int main()
         // after Stop.
         EchoTask   echoTasks[Clients];
         ClientTask clientTasks[Clients];
-        TC::Synchronization::TaskGroup_s
-                   group; // main is the only waiter; the accept task adds to it
-        AcceptTask acceptTask(listener, echoTasks, group);
+        // main is the only waiter; the accept task adds to it
+        TC::Synchronization::TaskGroup_s group;
+        AcceptTask                       acceptTask(listener, echoTasks, group);
         // [/objects]
 
         if (listening) {
@@ -225,8 +225,8 @@ int main()
                 group.AddTask(&clientTasks[i]);
                 scheduler->AddTask(&clientTasks[i]);
             }
-            group.Wait();     // accept task, clients and every echo task the accept
-                              // task started
+            // Accept task, clients and every echo task the accept task started.
+            group.Wait();
             listener.Close(); // no Accept is pending any more
             // [/run]
 
@@ -246,8 +246,8 @@ int main()
     scheduler->Destroy();
 
     // [shutdown]
-    TC::AsyncIo::DisableAsyncIo(); // every socket is closed, no operation is
-                                   // pending
+    // Every socket is closed, no operation is pending.
+    TC::AsyncIo::DisableAsyncIo();
     TC::Windows::Socket::Cleanup();
     // [/shutdown]
     TC::ConvertTaskToThread();

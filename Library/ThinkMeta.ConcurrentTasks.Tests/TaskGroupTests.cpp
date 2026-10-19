@@ -101,6 +101,58 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
             }
         }
 
+        // One waiter reuses the same group round after round, right after its Wait returned. The
+        // last task of a round resumes the waiter and may still be inside its exit notification
+        // while the waiter already adds the next round's tasks and waits again; that late exit
+        // must not let the waiter pass a second time with the next round still running.
+        TEST_METHOD(TestTaskGroupReuseBySameWaiter)
+        {
+            for (DWORD numThreads : GetMultiThreadTestCounts()) {
+                ConvertThreadToTask();
+
+                SchedulerInfo   schedulerInfo = {.numberOfThreads = numThreads};
+                ScopedScheduler scheduler(schedulerInfo);
+                scheduler.Start();
+
+                constexpr int    Rounds        = 5000;
+                constexpr size_t TasksPerRound = 3;
+
+                std::atomic<bool> passedEarly{false};
+                std::atomic<int>  roundsDone{0};
+
+                auto waiter = Tasks::Task::Create([&]() {
+                    Synchronization::TaskGroup group;
+                    std::atomic<int>           running{0};
+                    for (int round = 0; round < Rounds; ++round) {
+                        std::unique_ptr<ActionTask> tasks[TasksPerRound];
+                        for (auto& task : tasks) {
+                            task = std::make_unique<ActionTask>([&running, round]() {
+                                running.fetch_add(1, std::memory_order_acq_rel);
+                                for (int i = 0; i < round % 29; ++i)
+                                    YieldProcessor();
+                                running.fetch_sub(1, std::memory_order_acq_rel);
+                            });
+                            group.AddTask(task.get());
+                        }
+                        for (auto& task : tasks)
+                            GetTaskScheduler()->AddTask(task.get(), TaskPriority::Normal);
+                        group.Wait();
+                        if (running.load(std::memory_order_acquire) != 0 || !group.TryWait())
+                            passedEarly.store(true, std::memory_order_release);
+                        roundsDone.fetch_add(1, std::memory_order_release);
+                    }
+                });
+                scheduler.AddTask(&waiter, TaskPriority::Normal);
+
+                const bool finished = WaitFor([&roundsDone] { return roundsDone.load(std::memory_order_acquire) == Rounds; }, std::chrono::seconds(60));
+                Assert::IsTrue(finished, L"the waiter did not finish its rounds");
+                Assert::IsFalse(passedEarly.load(), L"Wait returned while tasks of the round were still running");
+
+                scheduler.Stop();
+                ConvertTaskToThread();
+            }
+        }
+
         TEST_METHOD(TestTaskGroupTryWait)
         {
             for (DWORD numThreads : GetTestThreadCounts()) {

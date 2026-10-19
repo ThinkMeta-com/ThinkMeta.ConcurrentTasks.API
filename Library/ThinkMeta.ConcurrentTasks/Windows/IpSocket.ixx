@@ -12,7 +12,6 @@ module;
 
 #include <WinSock2.h>
 
-#include <MSWSock.h>
 #include <Windows.h>
 #include <ws2ipdef.h>
 
@@ -64,17 +63,18 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         using Addr               = in_addr;
         using MulticastGroupInfo = ip_mreq;
 
-        static const int AddressFamily = AF_INET;
-        static const int OptionLevel   = IPPROTO_IP;
+        static constexpr int AddressFamily = AF_INET;
+        static constexpr int OptionLevel   = IPPROTO_IP;
 
-        static const int Option_AddMembership      = IP_ADD_MEMBERSHIP;
-        static const int Option_DropMembership     = IP_DROP_MEMBERSHIP;
-        static const int Option_HeaderInclude      = IP_HDRINCL;
-        static const int Option_MulticastInterface = IP_MULTICAST_IF;
-        static const int Option_MulticastLoop      = IP_MULTICAST_LOOP;
-        static const int Option_PacketInformation  = IP_PKTINFO;
-        static const int Option_RecvInterface      = IP_RECVIF;
-        static const int Option_UnicastInterface   = IP_UNICAST_IF;
+        static constexpr int Option_AddMembership      = IP_ADD_MEMBERSHIP;
+        static constexpr int Option_DropMembership     = IP_DROP_MEMBERSHIP;
+        static constexpr int Option_HeaderInclude      = IP_HDRINCL;
+        static constexpr int Option_MulticastInterface = IP_MULTICAST_IF;
+        static constexpr int Option_MulticastLoop      = IP_MULTICAST_LOOP;
+        static constexpr int Option_PacketInformation  = IP_PKTINFO;
+        static constexpr int Option_RecvInterface      = IP_RECVIF;
+        static constexpr int Option_UnicastInterface   = IP_UNICAST_IF;
+        static constexpr int Option_HopLimit           = IP_HOPLIMIT;
 
         static constexpr Addr AnyAddress() noexcept { return Addr{0}; }
     };
@@ -85,17 +85,18 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         using Addr               = in6_addr;
         using MulticastGroupInfo = ipv6_mreq;
 
-        static const int AddressFamily = AF_INET6;
-        static const int OptionLevel   = IPPROTO_IPV6;
+        static constexpr int AddressFamily = AF_INET6;
+        static constexpr int OptionLevel   = IPPROTO_IPV6;
 
-        static const int Option_AddMembership      = IPV6_ADD_MEMBERSHIP;
-        static const int Option_DropMembership     = IPV6_DROP_MEMBERSHIP;
-        static const int Option_HeaderInclude      = IPV6_HDRINCL;
-        static const int Option_MulticastInterface = IPV6_MULTICAST_IF;
-        static const int Option_MulticastLoop      = IPV6_MULTICAST_LOOP;
-        static const int Option_PacketInformation  = IPV6_PKTINFO;
-        static const int Option_RecvInterface      = IPV6_RECVIF;
-        static const int Option_UnicastInterface   = IPV6_UNICAST_IF;
+        static constexpr int Option_AddMembership      = IPV6_ADD_MEMBERSHIP;
+        static constexpr int Option_DropMembership     = IPV6_DROP_MEMBERSHIP;
+        static constexpr int Option_HeaderInclude      = IPV6_HDRINCL;
+        static constexpr int Option_MulticastInterface = IPV6_MULTICAST_IF;
+        static constexpr int Option_MulticastLoop      = IPV6_MULTICAST_LOOP;
+        static constexpr int Option_PacketInformation  = IPV6_PKTINFO;
+        static constexpr int Option_RecvInterface      = IPV6_RECVIF;
+        static constexpr int Option_UnicastInterface   = IPV6_UNICAST_IF;
+        static constexpr int Option_HopLimit           = IPV6_HOPLIMIT;
 
         static constexpr Addr AnyAddress() noexcept { return Addr{0}; }
     };
@@ -117,17 +118,12 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
     class CT_NOVTABLE _IpSocket : public _BaseSocket
     {
         using _Traits                = IpTraits<_IpVersion>;
-        static const int OptionLevel = _Traits::OptionLevel;
+        static constexpr int OptionLevel = _Traits::OptionLevel;
 
     protected:
         _IpSocket() noexcept = default;
-        _IpSocket(_IpSocket&& other) noexcept : _BaseSocket(std::move(other)) {}
-
-        _IpSocket& operator=(_IpSocket&& other) noexcept
-        {
-            _BaseSocket::operator=(std::move(other));
-            return *this;
-        }
+        _IpSocket(_IpSocket&& other) noexcept            = default;
+        _IpSocket& operator=(_IpSocket&& other) noexcept = default;
 
     public:
         /// <summary>Joins a multicast group (<c>IP_ADD_MEMBERSHIP</c> / <c>IPV6_ADD_MEMBERSHIP</c>).</summary>
@@ -162,6 +158,16 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <param name="include">Required. Receives <c>true</c> if the application supplies the IP header.</param>
         /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>getsockopt</c>.</returns>
         WinsockErrorCode GetOptionHeaderInclude(bool* include) noexcept { return this->GetOption(OptionLevel, _Traits::Option_HeaderInclude, include); }
+
+        /// <summary>Sets whether the hop limit of received packets is reported (<c>IP_HOPLIMIT</c>/<c>IPV6_HOPLIMIT</c>).</summary>
+        /// <param name="enable"><c>true</c> to report the hop limit (TTL) in the control data, <c>false</c> to stop it.</param>
+        /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>setsockopt</c>.</returns>
+        WinsockErrorCode SetOptionHopLimit(bool enable) noexcept { return this->SetOption(OptionLevel, _Traits::Option_HopLimit, enable); }
+
+        /// <summary>Gets whether the hop limit of received packets is reported.</summary>
+        /// <param name="enable">Required. Receives <c>true</c> if the hop limit is reported.</param>
+        /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>getsockopt</c>.</returns>
+        WinsockErrorCode GetOptionHopLimit(bool* enable) noexcept { return this->GetOption(OptionLevel, _Traits::Option_HopLimit, enable); }
 
         /// <summary>Sets the outgoing multicast interface (<c>IP_MULTICAST_IF</c> / <c>IPV6_MULTICAST_IF</c>).</summary>
         /// <param name="index">The interface index, in host byte order; <c>0</c> selects the default interface.</param>
@@ -285,7 +291,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
     {
         using _IpSocketBase          = _IpSocket<IpVersion::V4, _BaseSocket>;
         using _Traits                = IpTraits<IpVersion::V4>;
-        static const int OptionLevel = _Traits::OptionLevel;
+        static constexpr int OptionLevel = _Traits::OptionLevel;
 
     public:
         /// <summary>Creates an object without a socket.</summary>
@@ -293,27 +299,36 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
 
         /// <summary>Takes over <paramref name="other"/>'s socket; other is left without one.</summary>
         /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
-        IpSocketBase(IpSocketBase&& other) noexcept : _IpSocketBase(std::move(other)) {}
+        IpSocketBase(IpSocketBase&& other) noexcept = default;
 
         /// <summary>Takes over <paramref name="other"/>'s socket; a socket this object already holds is closed first.</summary>
         /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
         /// <returns>This object.</returns>
-        IpSocketBase& operator=(IpSocketBase&& other) noexcept
-        {
-            _IpSocketBase::operator=(std::move(other));
-            return *this;
-        }
+        IpSocketBase& operator=(IpSocketBase&& other) noexcept = default;
+
+        // the overloads below would otherwise hide the base's ip_mreq forms
+        using _IpSocketBase::SetOptionAddMembership;
+        using _IpSocketBase::SetOptionDropMembership;
 
         /// <summary>Joins an IPv4 multicast group on an interface.</summary>
         /// <param name="multicastAddress">The IPv4 multicast group address.</param>
-        /// <param name="index">The interface index (below 256, see remarks).</param>
+        /// <param name="index">The interface index (below 2^24, see remarks).</param>
         /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>setsockopt</c>.</returns>
-        /// <remarks>The index is passed as interface address 0.0.0.index, so only indices below 256 work.</remarks>
+        /// <remarks>The index is passed as interface address 0.x.y.z, which Windows reads as an interface index.</remarks>
         /// <seealso cref="SetOptionDropMembership"/>
-        WinsockErrorCode SetOptionAddMembership(const in_addr& multicastAddress, unsigned long index) noexcept
+        WinsockErrorCode SetOptionAddMembership(const in_addr& multicastAddress, DWORD index) noexcept
         {
-            const ip_mreq mgit = {multicastAddress, {0, 0, 0, static_cast<unsigned char>(index)}};
-            return _IpSocketBase::SetOptionAddMembership(mgit);
+            return _IpSocketBase::SetOptionAddMembership(MembershipByIndex(multicastAddress, index));
+        }
+
+        /// <summary>Leaves an IPv4 multicast group joined by interface index.</summary>
+        /// <param name="multicastAddress">The IPv4 multicast group address, as joined.</param>
+        /// <param name="index">The interface index, as joined.</param>
+        /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>setsockopt</c>.</returns>
+        /// <seealso cref="SetOptionAddMembership"/>
+        WinsockErrorCode SetOptionDropMembership(const in_addr& multicastAddress, DWORD index) noexcept
+        {
+            return _IpSocketBase::SetOptionDropMembership(MembershipByIndex(multicastAddress, index));
         }
 
         /// <summary>Joins a source-specific multicast group (<c>IP_ADD_SOURCE_MEMBERSHIP</c>).</summary>
@@ -455,6 +470,16 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
             sockAddr.sin_addr   = addr;
             sockAddr.sin_port   = htons(port);
         }
+
+    private:
+        // interface address 0.x.y.z: Windows takes it as the interface index (network byte order)
+        static ip_mreq MembershipByIndex(const in_addr& multicastAddress, DWORD index) noexcept
+        {
+            ip_mreq mgit{};
+            mgit.imr_multiaddr        = multicastAddress;
+            mgit.imr_interface.s_addr = htonl(index);
+            return mgit;
+        }
     };
 
     template <SocketType _BaseSocket>
@@ -462,7 +487,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
     {
         using _IpSocketBase          = _IpSocket<IpVersion::V6, _BaseSocket>;
         using _Traits                = IpTraits<IpVersion::V6>;
-        static const int OptionLevel = _Traits::OptionLevel;
+        static constexpr int OptionLevel = _Traits::OptionLevel;
 
     public:
         /// <summary>Creates an object without a socket.</summary>
@@ -470,49 +495,60 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
 
         /// <summary>Takes over <paramref name="other"/>'s socket; other is left without one.</summary>
         /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
-        IpSocketBase(IpSocketBase&& other) noexcept : _IpSocketBase(std::move(other)) {}
+        IpSocketBase(IpSocketBase&& other) noexcept = default;
 
         /// <summary>Takes over <paramref name="other"/>'s socket; a socket this object already holds is closed first.</summary>
         /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
         /// <returns>This object.</returns>
-        IpSocketBase& operator=(IpSocketBase&& other) noexcept
-        {
-            _IpSocketBase::operator=(std::move(other));
-            return *this;
-        }
+        IpSocketBase& operator=(IpSocketBase&& other) noexcept = default;
+
+        // the overloads below would otherwise hide the base's ipv6_mreq forms
+        using _IpSocketBase::SetOptionAddMembership;
+        using _IpSocketBase::SetOptionDropMembership;
 
         /// <summary>Joins an IPv6 multicast group on an interface.</summary>
         /// <param name="multicastAddress">The IPv6 multicast group address.</param>
         /// <param name="index">The interface index; <c>0</c> selects the default interface.</param>
         /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>setsockopt</c>.</returns>
         /// <seealso cref="SetOptionDropMembership"/>
-        WinsockErrorCode SetOptionAddMembership(const in6_addr& multicastAddress, unsigned long index) noexcept
+        WinsockErrorCode SetOptionAddMembership(const in6_addr& multicastAddress, DWORD index) noexcept
         {
             const ipv6_mreq mgit = {multicastAddress, index};
             return _IpSocketBase::SetOptionAddMembership(mgit);
         }
 
-        /// <summary>Sets <c>IPV6_HOPLIMIT</c> (receive the hop limit in control data).</summary>
-        /// <param name="enable"><c>true</c> to report the hop limit of received packets, <c>false</c> to stop it.</param>
+        /// <summary>Leaves an IPv6 multicast group joined by interface index.</summary>
+        /// <param name="multicastAddress">The IPv6 multicast group address, as joined.</param>
+        /// <param name="index">The interface index, as joined.</param>
         /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>setsockopt</c>.</returns>
-        WinsockErrorCode SetOptionHopLimit(bool enable) noexcept { return this->SetOption(OptionLevel, IPV6_HOPLIMIT, enable); }
+        /// <seealso cref="SetOptionAddMembership"/>
+        WinsockErrorCode SetOptionDropMembership(const in6_addr& multicastAddress, DWORD index) noexcept
+        {
+            const ipv6_mreq mgit = {multicastAddress, index};
+            return _IpSocketBase::SetOptionDropMembership(mgit);
+        }
 
-        /// <summary>Gets the <c>IPV6_HOPLIMIT</c> setting.</summary>
-        /// <param name="enable">Required. Receives <c>true</c> if the hop limit is reported.</param>
+        /// <summary>Sets the unicast hop limit (<c>IPV6_UNICAST_HOPS</c>).</summary>
+        /// <param name="hops">The hop limit of outgoing unicast packets (<c>0</c> to <c>255</c>).</param>
+        /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>setsockopt</c>.</returns>
+        /// <remarks>The IPv6 counterpart of the IPv4 time to live.</remarks>
+        WinsockErrorCode SetOptionUnicastHops(DWORD hops) noexcept { return this->SetOption(OptionLevel, IPV6_UNICAST_HOPS, hops); }
+
+        /// <summary>Gets the unicast hop limit (<c>IPV6_UNICAST_HOPS</c>).</summary>
+        /// <param name="hops">Required. Receives the hop limit of outgoing unicast packets.</param>
         /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>getsockopt</c>.</returns>
-        WinsockErrorCode GetOptionHopLimit(bool* enable) noexcept { return this->GetOption(OptionLevel, IPV6_HOPLIMIT, enable); }
+        WinsockErrorCode GetOptionUnicastHops(DWORD* hops) noexcept { return this->GetOption(OptionLevel, IPV6_UNICAST_HOPS, hops); }
 
-        /// <summary>Joins a multicast group (<c>IPV6_JOIN_GROUP</c>).</summary>
-        /// <param name="mgi">The multicast group address and the interface index.</param>
+        /// <summary>Sets the multicast hop limit (<c>IPV6_MULTICAST_HOPS</c>).</summary>
+        /// <param name="hops">The hop limit of outgoing multicast packets (<c>0</c> to <c>255</c>; default <c>1</c>).</param>
         /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>setsockopt</c>.</returns>
-        /// <seealso cref="SetOptionLeaveGroup"/>
-        WinsockErrorCode SetOptionJoinGroup(const ipv6_mreq& mgi) noexcept { return this->SetOption(OptionLevel, IPV6_JOIN_GROUP, mgi); }
+        /// <remarks>The IPv6 counterpart of the IPv4 multicast time to live.</remarks>
+        WinsockErrorCode SetOptionMulticastHops(DWORD hops) noexcept { return this->SetOption(OptionLevel, IPV6_MULTICAST_HOPS, hops); }
 
-        /// <summary>Leaves a multicast group (<c>IPV6_LEAVE_GROUP</c>).</summary>
-        /// <param name="mgi">The multicast group address and the interface index, as joined.</param>
-        /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>setsockopt</c>.</returns>
-        /// <seealso cref="SetOptionJoinGroup"/>
-        WinsockErrorCode SetOptionLeaveGroup(const ipv6_mreq& mgi) noexcept { return this->SetOption(OptionLevel, IPV6_LEAVE_GROUP, mgi); }
+        /// <summary>Gets the multicast hop limit (<c>IPV6_MULTICAST_HOPS</c>).</summary>
+        /// <param name="hops">Required. Receives the hop limit of outgoing multicast packets.</param>
+        /// <returns><see cref="WinsockError::Success"/>, or the WSA error of <c>getsockopt</c>.</returns>
+        WinsockErrorCode GetOptionMulticastHops(DWORD* hops) noexcept { return this->GetOption(OptionLevel, IPV6_MULTICAST_HOPS, hops); }
 
         /// <summary>Sets the protection level (<c>IPV6_PROTECTION_LEVEL</c>, <c>PROTECTION_LEVEL_*</c>).</summary>
         /// <param name="level">

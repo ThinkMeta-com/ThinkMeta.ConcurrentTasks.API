@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <vector>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Synchronization.Semaphore;
@@ -18,6 +19,7 @@ import ThinkMeta.ConcurrentTasks.Windows.Error;
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::AsyncFile;
 using TC::Windows::Error;
+// [/names]
 
 // [sizes]
 constexpr DWORD    BlockSize = 1 << 20; // 1 MB per block
@@ -53,8 +55,8 @@ struct Slot {
     std::uint64_t             offset = 0;
     DWORD                     size   = 0; // 0: the end of the input
     TransformTask             transform;
-    TC::Synchronization::TaskGroup_s
-        transformed; // the writer waits here for this slot's block
+    // the writer waits here for this slot's block
+    TC::Synchronization::TaskGroup_s transformed;
 };
 
 void TransformTask::Run() noexcept
@@ -64,7 +66,7 @@ void TransformTask::Run() noexcept
 }
 // [/slot]
 
-// [pipeline]
+// [read]
 class Pipeline
 {
 public:
@@ -86,8 +88,8 @@ public:
                         FILE_FLAG_SEQUENTIAL_SCAN));
         readFailed_ = !open;
         for (unsigned block = 0;; ++block) {
-            freeSlots_
-                .Wait(); // at most Slots blocks in flight: bounds memory and tasks
+            // at most Slots blocks in flight: bounds memory and tasks
+            freeSlots_.Wait();
             Slot& slot  = slots_[block % Slots];
             slot.offset = std::uint64_t{BlockSize} * block;
             slot.size   = 0;
@@ -102,12 +104,14 @@ public:
                 return;
             }
             slot.transformed.AddTask(&slot.transform);
-            slot.transform.Schedule(
-                TC::TaskPriority::Normal); // Default would inherit High
-            readySlots_.Release();         // the writer may wait for this block now
+            // Default would inherit High
+            slot.transform.Schedule(TC::TaskPriority::Normal);
+            readySlots_.Release(); // the writer may wait for this block now
         }
     }
+    // [/read]
 
+    // [write]
     // Serial stage 3: write the blocks in order, each as soon as its transform has
     // exited.
     void Write() noexcept
@@ -134,17 +138,16 @@ public:
     bool Failed() const noexcept { return readFailed_ || writeFailed_; }
 
 private:
-    const wchar_t*                   inputPath_;
-    const wchar_t*                   outputPath_;
-    Slot                             slots_[Slots];
-    TC::Synchronization::Semaphore_s freeSlots_{
-        Slots}; // free slots; one waiter: the reader
-    TC::Synchronization::Semaphore_s readySlots_{
-        0}; // forked blocks; one waiter: the writer
-    bool readFailed_  = false;
-    bool writeFailed_ = false;
+    const wchar_t* inputPath_;
+    const wchar_t* outputPath_;
+    Slot           slots_[Slots];
+    // Free slots and forked blocks; each has one waiter: the reader, the writer.
+    TC::Synchronization::Semaphore_s freeSlots_{Slots};
+    TC::Synchronization::Semaphore_s readySlots_{0};
+    bool                             readFailed_  = false;
+    bool                             writeFailed_ = false;
+    // [/write]
 };
-// [/pipeline]
 
 // Test driver: an input file of 47.5 blocks, so that the last block is a short one.
 constexpr std::uint64_t InputSize = std::uint64_t{BlockSize} * 95 / 2;
@@ -229,8 +232,8 @@ int main()
     TC::Synchronization::TaskGroup_s stages;
     stages.AddTask(&reader);
     stages.AddTask(&writer);
-    scheduler->AddTask(
-        &reader, TC::TaskPriority::High); // the serial stages are the critical path
+    // the serial stages are the critical path
+    scheduler->AddTask(&reader, TC::TaskPriority::High);
     scheduler->AddTask(&writer, TC::TaskPriority::High);
     stages.Wait(); // the writer waits for every transform, so all have run
     // [/run]

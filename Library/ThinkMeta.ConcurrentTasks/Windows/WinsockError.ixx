@@ -15,6 +15,8 @@ module;
 
 export module ThinkMeta.ConcurrentTasks.Windows.WinsockError;
 
+export import ThinkMeta.ConcurrentTasks.Windows.Error;
+
 namespace ThinkMeta::ConcurrentTasks::Windows {
     /// <summary>Named Winsock error codes and helpers that turn Winsock return values into error codes.</summary>
     /// <remarks>
@@ -80,64 +82,87 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <returns>The last error code; only meaningful right after a failed Winsock call on this thread.</returns>
         static Type GetLastError() noexcept { return ::WSAGetLastError(); }
 
+        /// <summary>The Winsock error of a completed overlapped operation.</summary>
+        /// <param name="overlapped">The operation's <c>OVERLAPPED</c>; its <c>Internal</c> holds the final <c>NTSTATUS</c>.</param>
+        /// <param name="error">The error reported for the completion; <see cref="Success"/> (<c>0</c>) if it succeeded.</param>
+        /// <returns>
+        /// <see cref="Success"/> if <paramref name="error"/> is; otherwise the <c>WSAE*</c> code Winsock gives the
+        /// operation's status (what <c>WSAGetOverlappedResult</c> would report), or <paramref name="error"/>
+        /// itself if the status is unknown here or no failure status is at hand.
+        /// </returns>
+        /// <remarks>
+        /// A completion port reports a failed operation as a Win32 code made from its <c>NTSTATUS</c>
+        /// (<c>ERROR_NETNAME_DELETED</c> for a reset, say), while the same failure of a synchronous call
+        /// is a <c>WSAE*</c> code (<c>WSAECONNRESET</c>). This maps the status back to the Winsock code
+        /// without a socket at hand. A failure the issuer reported itself is a <c>WSAE*</c> code
+        /// already and leaves no failure status in the <c>OVERLAPPED</c>, so it passes unchanged.
+        /// </remarks>
+        static Type FromOverlapped(const OVERLAPPED& overlapped, Type error) noexcept
+        {
+            if (Succeeded(error))
+                return Success;
+
+            // NTSTATUS values spelled out: ntstatus.h clashes with Windows.h. Only failures are
+            // mapped; a success or warning status leaves the reported code as it is.
+            const auto status = static_cast<unsigned long>(overlapped.Internal);
+            if (status < 0xC0000000)
+                return error;
+
+            switch (status) {
+            case 0xC0000120: return WSA_OPERATION_ABORTED; // STATUS_CANCELLED
+            case 0xC000020D:                               // STATUS_CONNECTION_RESET
+            case 0xC000013C:                               // STATUS_REMOTE_DISCONNECT
+            case 0xC000020C:                               // STATUS_CONNECTION_DISCONNECTED
+            case 0xC000023F: return WSAECONNRESET;         // STATUS_PORT_UNREACHABLE
+            case 0xC0000241:                               // STATUS_CONNECTION_ABORTED
+            case 0xC000013B: return WSAECONNABORTED;       // STATUS_LOCAL_DISCONNECT
+            case 0xC0000236: return WSAECONNREFUSED;       // STATUS_CONNECTION_REFUSED
+            case 0xC0000237: return WSAEDISCON;            // STATUS_GRACEFUL_DISCONNECT
+            case 0xC00000B5: return WSAETIMEDOUT;          // STATUS_IO_TIMEOUT
+            case 0xC000023D: return WSAEHOSTUNREACH;       // STATUS_HOST_UNREACHABLE
+            case 0xC0000350: return WSAEHOSTDOWN;          // STATUS_HOST_DOWN
+            case 0xC000023C:                               // STATUS_NETWORK_UNREACHABLE
+            case 0xC000023E:                               // STATUS_PROTOCOL_UNREACHABLE
+            case 0xC00000BE: return WSAENETUNREACH;        // STATUS_BAD_NETWORK_PATH
+            case 0xC000009A:                               // STATUS_INSUFFICIENT_RESOURCES
+            case 0xC0000209: return WSAENOBUFS;            // STATUS_TOO_MANY_ADDRESSES
+            case 0xC000020A: return WSAEADDRINUSE;         // STATUS_ADDRESS_ALREADY_EXISTS
+            case 0xC0000207: return WSAEADDRNOTAVAIL;      // STATUS_INVALID_ADDRESS_COMPONENT
+            case 0xC0000140:                               // STATUS_INVALID_CONNECTION
+            case 0xC000023A: return WSAENOTCONN;           // STATUS_CONNECTION_INVALID
+            case 0xC000023B: return WSAEISCONN;            // STATUS_CONNECTION_ACTIVE
+            case 0xC0000022: return WSAEACCES;             // STATUS_ACCESS_DENIED
+            case 0xC0000008: return WSAENOTSOCK;           // STATUS_INVALID_HANDLE
+            case 0xC00000BB: return WSAEOPNOTSUPP;         // STATUS_NOT_SUPPORTED
+            case 0xC000000D: return WSAEINVAL;             // STATUS_INVALID_PARAMETER
+            default:         return error;
+            }
+        }
+
         /// <summary><c>true</c> for <see cref="Success"/>.</summary>
         /// <param name="error">The error code to test.</param>
         /// <returns><c>true</c> if <paramref name="error"/> is <see cref="Success"/> (<c>0</c>); otherwise <c>false</c>.</returns>
         /// <seealso cref="Failed"/>
-        static bool Succeeded(const Type& error) noexcept { return error == Success; }
+        static constexpr bool Succeeded(Type error) noexcept { return error == Success; }
 
         /// <summary><c>true</c> for anything but <see cref="Success"/>, including <see cref="Pending"/>.</summary>
         /// <param name="error">The error code to test.</param>
         /// <returns><c>true</c> if <paramref name="error"/> is not <see cref="Success"/>; otherwise <c>false</c>.</returns>
         /// <seealso cref="Succeeded"/>
         /// <seealso cref="IsPending"/>
-        static bool Failed(const Type& error) noexcept { return !Succeeded(error); }
+        static constexpr bool Failed(Type error) noexcept { return !Succeeded(error); }
 
         /// <summary><c>true</c> for <see cref="Pending"/>: an overlapped operation is in flight.</summary>
         /// <param name="error">The error code to test.</param>
         /// <returns><c>true</c> if <paramref name="error"/> is <see cref="Pending"/> (<c>WSA_IO_PENDING</c>); otherwise <c>false</c>.</returns>
-        static bool IsPending(const Type& error) noexcept { return error == Pending; }
+        static constexpr bool IsPending(Type error) noexcept { return error == Pending; }
     };
 
     /// <summary>A Winsock error code as returned by the socket classes (<c>0</c> = <see cref="WinsockError::Success"/>).</summary>
     /// <seealso cref="WinsockError"/>
     export using WinsockErrorCode = WinsockError::Type;
 
-    /// <summary>Exception carrying a <see cref="WinsockErrorCode"/>.</summary>
-    /// <remarks>For callers that prefer exceptions over error codes.</remarks>
-    export class WinsockErrorException
-    {
-    public:
-        /// <summary>Wraps <paramref name="errorCode"/>.</summary>
-        /// <param name="errorCode">The Winsock error code to carry, normally a failure code.</param>
-        explicit WinsockErrorException(WinsockErrorCode errorCode) noexcept : errorCode_{errorCode} {}
-
-        /// <summary>The wrapped error code.</summary>
-        /// <returns>The error code passed to the constructor.</returns>
-        WinsockErrorCode GetErrorCode() const noexcept { return errorCode_; }
-
-#ifdef _CPPUNWIND
-        /// <summary>Throws a <see cref="WinsockErrorException"/> for <paramref name="errorCode"/>.</summary>
-        /// <param name="errorCode">The Winsock error code the exception carries.</param>
-        [[noreturn]] static void Throw(WinsockErrorCode errorCode) { throw WinsockErrorException(errorCode); }
-#else
-        /// <summary>Without exception support: ends the process (<c>__fastfail</c>) instead of throwing.</summary>
-        /// <param name="errorCode">The Winsock error code; not used, the process ends.</param>
-        /// <remarks>There is nothing to unwind, so a failure the caller cannot be told about ends the process here.</remarks>
-        [[noreturn]] static void Throw([[maybe_unused]] WinsockErrorCode errorCode) noexcept { __fastfail(FAST_FAIL_FATAL_APP_EXIT); }
-#endif
-
-        /// <summary>Throws if <paramref name="errorCode"/> is not <see cref="WinsockError::Success"/>.</summary>
-        /// <param name="errorCode">The Winsock error code to check; any value but <see cref="WinsockError::Success"/> throws.</param>
-        /// <remarks>Without exception support it ends the process instead.</remarks>
-        /// <seealso cref="Throw"/>
-        static void ThrowIfFailed(WinsockErrorCode errorCode)
-        {
-            if (WinsockError::Failed(errorCode))
-                Throw(errorCode);
-        }
-
-    private:
-        const WinsockErrorCode errorCode_;
-    };
+    /// <summary>Carries a <see cref="WinsockErrorCode"/> out of code that has no error return.</summary>
+    /// <remarks>For callers that prefer exceptions over error codes; see <see cref="_ErrorException"/>.</remarks>
+    export using WinsockErrorException = _ErrorException<WinsockError>;
 } // namespace ThinkMeta::ConcurrentTasks::Windows

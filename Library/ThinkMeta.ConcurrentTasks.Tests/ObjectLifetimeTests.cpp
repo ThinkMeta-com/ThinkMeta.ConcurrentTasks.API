@@ -4,14 +4,16 @@
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Synchronization.AutoResetEvent;
 import ThinkMeta.ConcurrentTasks.Synchronization.ManualResetEvent;
+import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
+import ThinkMeta.ConcurrentTasks.Tasks.WaitableTask;
 
 using namespace Microsoft::VisualStudio::CppUnitTestFramework;
 
 // A waiter may destroy the object it waited on as soon as the wait is over - the I/O request of a
 // socket call, a TaskGroup on the stack. Nothing in the library may touch the object after the
-// operation that let the waiter pass (Core/Docs/Analyse-Objektlebensdauer.md). Each object here lives
-// on a page of its own that the waiter releases right after its wait, so any late access faults.
+// operation that let the waiter pass. Each object here lives on a page of its own that the waiter
+// releases right after its wait, so any late access faults.
 // Many waiters run at once, each a scheduled task (a converted thread runs OnSuspended itself before
 // it blocks), and the signal comes before, during or after the suspension.
 
@@ -76,6 +78,13 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
         }
 
         constexpr auto NoPreparation = [](auto&, ActionTask*) {};
+
+        // a waitable task that exits at once; the member task schedules it. The single-waiter
+        // variant: only its exit lets the waiter go in one operation, so only it may be destroyed
+        // right after the wait (WaitableTask.ixx).
+        struct ExitingTask final : Tasks::WaitableTask_s {
+            void Run() noexcept override {}
+        };
     } // namespace
 
     TEST_CLASS(ObjectLifetimeTests)
@@ -100,6 +109,21 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                                              event.Wait();
                                      });
             DisableTimers();
+        }
+
+        TEST_METHOD(TestWaitableTaskSingleWaiterFreedAfterWait)
+        {
+            // the waiter owns the task object and lets it go as soon as Wait returned; the exit's
+            // Set must not touch the object after resuming it
+            RunLifetimeRounds<ExitingTask>(NoPreparation, [](ExitingTask& task) { GetTaskScheduler()->AddTask(&task, TaskPriority::Normal); },
+                                           [](ExitingTask& task, int) { task.Wait(); });
+        }
+
+        TEST_METHOD(TestTaskGroupFreedAfterWait)
+        {
+            // a group on the waiter's stack: the member's exit counts it out and resumes the waiter
+            using Group = Synchronization::TaskGroup;
+            RunLifetimeRounds<Group>([](Group& group, ActionTask* member) { group.AddTask(member); }, [](Group&) {}, [](Group& group, int) { group.Wait(); });
         }
 
         TEST_METHOD(TestAutoResetEventFreedAfterWait)

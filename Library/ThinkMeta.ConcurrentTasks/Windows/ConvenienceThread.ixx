@@ -11,6 +11,8 @@ module;
 
 #include <Windows.h>
 
+#include <cstddef>
+
 #include "Defs.h"
 
 export module ThinkMeta.ConcurrentTasks.Windows.ConvenienceThread;
@@ -36,36 +38,37 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
     public:
         /// <summary>Starts the thread, which calls <see cref="Run"/>.</summary>
         /// <param name="stackSize">Initial stack size in bytes; <c>0</c> means the default stack size.</param>
-        /// <returns><c>true</c> if the thread was started; <c>false</c> on failure (<c>GetLastError</c> has the reason).</returns>
+        /// <returns><see cref="Error::Success"/> if the thread was started; otherwise the Win32 error.</returns>
         /// <remarks>Call once.</remarks>
         /// <seealso cref="Wait"/>
-        bool Create(size_t stackSize = 0) noexcept { return Error::Succeeded(thread_.Create(nullptr, stackSize, ThreadProc, this, 0, nullptr)); }
+        ErrorCode Create(std::size_t stackSize = 0) noexcept { return thread_.Create(nullptr, stackSize, ThreadProc, this, 0, nullptr); }
 
         /// <summary>Returns whether the thread handle is open (created and not closed).</summary>
         /// <returns><c>true</c> if the handle is open; otherwise <c>false</c>.</returns>
         bool IsValid() const noexcept { return thread_.IsValid(); }
 
         /// <summary>Closes the thread handle.</summary>
-        /// <returns>
-        /// <c>true</c> on success, also if no handle was open; <c>false</c> on failure (<c>GetLastError</c>
-        /// has the reason).
-        /// </returns>
+        /// <returns><see cref="Error::Success"/>, also if no handle was open; otherwise the Win32 error.</returns>
         /// <remarks>The thread keeps running; <see cref="Wait"/> is no longer possible afterwards.</remarks>
-        bool Close() noexcept { return Error::Succeeded(thread_.Close()); }
+        ErrorCode Close() noexcept { return thread_.Close(); }
 
         /// <summary>Waits until the thread has exited.</summary>
         /// <param name="milliseconds">Timeout in milliseconds; <c>INFINITE</c> waits without one.</param>
         /// <returns>
-        /// <c>true</c> if the thread has exited, <c>false</c> if the wait timed out or failed.
+        /// <see cref="Error::Success"/> if the thread has exited, <see cref="Error::WaitTimedOut"/> if the wait
+        /// timed out, otherwise the Win32 error of the wait.
         /// </returns>
         /// <remarks>
         /// Blocks the calling OS thread: called from a task it blocks the whole scheduler thread.
         /// </remarks>
         /// <seealso cref="Create"/>
-        bool Wait(DWORD milliseconds) noexcept
+        ErrorCode Wait(DWORD milliseconds) noexcept
         {
-            DWORD event;
-            return Error::Succeeded(thread_.Wait(milliseconds, event)) && event == WAIT_OBJECT_0;
+            DWORD     event = WAIT_FAILED;
+            ErrorCode error = thread_.Wait(milliseconds, event);
+            if (Error::Succeeded(error) && event != WAIT_OBJECT_0)
+                error = Error::WaitTimedOut;
+            return error;
         }
 
     protected:
@@ -81,7 +84,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         virtual void Run() noexcept = 0;
 
     private:
-        static DWORD WINAPI ThreadProc(LPVOID lpv) noexcept
+        static DWORD WINAPI ThreadProc(void* lpv) noexcept
         {
             CT_ASSERT(lpv);
 

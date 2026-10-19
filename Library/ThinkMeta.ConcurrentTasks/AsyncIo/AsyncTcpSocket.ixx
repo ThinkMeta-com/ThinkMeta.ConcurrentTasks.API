@@ -11,9 +11,9 @@ module;
 
 #include <WinSock2.h>
 #include <Windows.h>
-#include <MSWSock.h>
 
 #include <array>
+#include <cstdint>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 
@@ -39,7 +39,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// <remarks>
     /// <see cref="AsyncSocket"/> plus the TCP/IP options of <see cref="Windows::TcpSocketBase"/>/
     /// <see cref="Windows::IpSocketBase"/>, for <see cref="Windows::IpVersion::V4"/> or V6.
-    /// Create() (no arguments, see <see cref="Windows::_TcpSocket::Create"/>) creates an overlapped TCP socket
+    /// Create() (no arguments, see <see cref="Windows::TcpSocketBase::Create"/>) creates an overlapped TCP socket
     /// of the right address family and associates it with the core's completion port; needs
     /// <see cref="Windows::Socket::Startup"/> and <see cref="EnableAsyncIo"/>.
     /// The object owns the <c>SOCKET</c> and closes it on destruction.
@@ -52,7 +52,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         using _Base = TcpSocketBase<_IpVersion, AsyncSocket>;
         using _Traits = IpTraits<_IpVersion>;
 
-        static const DWORD AddressBufferSize = sizeof(typename _Traits::SockAddr) + 16;
+        static constexpr std::uint32_t AddressBufferSize = sizeof(typename _Traits::SockAddr) + 16;
 
     public:
         /// <summary>Creates an object without a socket.</summary>
@@ -60,16 +60,12 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
         /// <summary>Takes over <paramref name="other"/>'s socket; other is left without one.</summary>
         /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
-        AsyncTcpSocket(AsyncTcpSocket&& other) noexcept : _Base(std::move(other)) {}
+        AsyncTcpSocket(AsyncTcpSocket&& other) noexcept = default;
 
         /// <summary>Takes over <paramref name="other"/>'s socket; a socket this object already holds is closed first.</summary>
         /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
         /// <returns>This object.</returns>
-        AsyncTcpSocket& operator=(AsyncTcpSocket&& other) noexcept
-        {
-            _Base::operator=(std::move(other));
-            return *this;
-        }
+        AsyncTcpSocket& operator=(AsyncTcpSocket&& other) noexcept = default;
 
         /// <summary>Accepts one connection on this listening socket.</summary>
         /// <param name="acceptSocket">
@@ -111,8 +107,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             // AcceptEx does not update the accepted socket's context from the listening socket, so
             // the new socket stays "not connected" (WSAENOTCONN / 10057) for getpeername, recv, send,
             // shutdown, etc. until SO_UPDATE_ACCEPT_CONTEXT is applied.
-            const SOCKET listenSocket = this->GetSocket();
-            error                     = acceptSocket.SetOption(SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, listenSocket);
+            error = acceptSocket.SetOptionUpdateAcceptContext(*this);
             if (WinsockError::Failed(error)) {
                 acceptSocket.Close();
                 return error;
@@ -128,7 +123,13 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                                            reinterpret_cast<sockaddr**>(&localAddress), &localAddressLength,
                                            reinterpret_cast<sockaddr**>(&remoteAddress), &remoteAddressLength);
 
-                CopyMemory(address, remoteAddress, sizeof(*address));
+                // only what AcceptEx stored: a shorter address (family mismatch on a dual-stack
+                // listener) must not pull bytes from behind it
+                const auto length = remoteAddressLength > 0 && static_cast<std::size_t>(remoteAddressLength) < sizeof(*address)
+                                        ? static_cast<std::size_t>(remoteAddressLength)
+                                        : sizeof(*address);
+                ZeroMemory(address, sizeof(*address));
+                CopyMemory(address, remoteAddress, length);
             }
 
             return error;
@@ -150,20 +151,16 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <seealso cref="ConnectAsync"/>
         WinsockErrorCode Connect(const typename _Traits::SockAddr& address, Duration timeout = Duration::Infinite()) noexcept
         {
-            CT_ASSERT(this->IsValid());
-
             WaitableAsyncSocketIoRequest_s asyncIoRequest;
-            auto error = this->ConnectAsync(&address, sizeof(address), nullptr, 0, nullptr, asyncIoRequest);
+            auto error = ConnectAsync(address, asyncIoRequest);
             error      = this->WaitForAsyncIoOperation(error, nullptr, asyncIoRequest, timeout);
             if (WinsockError::Failed(error))
                 return error;
 
             // ConnectEx leaves the socket's context without the connection state;
             // SO_UPDATE_CONNECT_CONTEXT sets it so that getpeername/getsockname/shutdown and option
-            // queries behave correctly. This option takes no value, so it uses the valueless
-            // SetOption overload.
-            error = this->SetOption(SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT);
-            return error;
+            // queries behave correctly.
+            return this->SetOptionUpdateConnectContext();
         }
 
         using _Base::ConnectAsync;

@@ -163,14 +163,14 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         {
             CT_ASSERT(!IsValid());
 
-            handle_ = ::CreateFile(fileName, desiredAccess, shareMode, securityAttributes, creationDisposition, flagsAndAttributes, templateFile);
+            handle_ = ::CreateFileW(fileName, desiredAccess, shareMode, securityAttributes, creationDisposition, flagsAndAttributes, templateFile);
             return IsValid() ? Error::Success : Error::GetLastError();
         }
 
         /// <summary><c>DeleteFileW</c>.</summary>
         /// <param name="fileName">Path of the file to delete; must not be <c>nullptr</c>.</param>
         /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
-        static ErrorCode Delete(const FileName& fileName) noexcept { return Error::GetError(::DeleteFile(fileName)); }
+        static ErrorCode Delete(const FileName& fileName) noexcept { return Error::GetError(::DeleteFileW(fileName)); }
 
         /// <summary><c>SetEndOfFile</c> at the current file pointer.</summary>
         /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
@@ -308,7 +308,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
         static ErrorCode CreateHardLink(const FileName& fileName, const FileName& existingFileName) noexcept
         {
-            return Error::GetError(::CreateHardLink(fileName, existingFileName, nullptr));
+            return Error::GetError(::CreateHardLinkW(fileName, existingFileName, nullptr));
         }
 
         /// <summary><c>CreateSymbolicLinkW</c>.</summary>
@@ -321,20 +321,20 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
         static ErrorCode CreateSymbolicLink(const FileName& symlinkFileName, const FileName& targetFileName, DWORD flags) noexcept
         {
-            return Error::GetError(::CreateSymbolicLink(symlinkFileName, targetFileName, flags));
+            return Error::GetError(::CreateSymbolicLinkW(symlinkFileName, targetFileName, flags));
         }
 
         /// <summary><c>DecryptFileW</c> (EFS).</summary>
         /// <param name="fileName">Path of the encrypted file or directory.</param>
         /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
         /// <seealso cref="Encrypt"/>
-        static ErrorCode Decrypt(const FileName& fileName) noexcept { return Error::GetError(::DecryptFile(fileName, 0)); }
+        static ErrorCode Decrypt(const FileName& fileName) noexcept { return Error::GetError(::DecryptFileW(fileName, 0)); }
 
         /// <summary><c>EncryptFileW</c> (EFS).</summary>
         /// <param name="fileName">Path of the file or directory to encrypt; a file must not be open elsewhere.</param>
         /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
         /// <seealso cref="Decrypt"/>
-        static ErrorCode Encrypt(const FileName& fileName) noexcept { return Error::GetError(::EncryptFile(fileName)); }
+        static ErrorCode Encrypt(const FileName& fileName) noexcept { return Error::GetError(::EncryptFileW(fileName)); }
 
         /// <summary><c>FileEncryptionStatusW</c>.</summary>
         /// <param name="fileName">Path of the file or directory.</param>
@@ -342,7 +342,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
         static ErrorCode EncryptionStatus(const FileName& fileName, DWORD& status) noexcept
         {
-            return Error::GetError(::FileEncryptionStatus(fileName, &status));
+            return Error::GetError(::FileEncryptionStatusW(fileName, &status));
         }
 
         /// <summary><c>GetBinaryTypeW</c> (<c>SCS_*</c> value).</summary>
@@ -352,7 +352,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <c>ERROR_SUCCESS</c> for an executable; otherwise the Win32 error code (also for a file that is not
         /// executable).
         /// </returns>
-        static ErrorCode GetBinaryType(const FileName& fileName, DWORD& binaryType) noexcept { return Error::GetError(::GetBinaryType(fileName, &binaryType)); }
+        static ErrorCode GetBinaryType(const FileName& fileName, DWORD& binaryType) noexcept { return Error::GetError(::GetBinaryTypeW(fileName, &binaryType)); }
 
         /// <summary><c>GetCompressedFileSizeW</c>: bytes the file occupies on disk.</summary>
         /// <param name="fileName">Path of the file.</param>
@@ -361,7 +361,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         static ErrorCode GetCompressedSize(const FileName& fileName, FileSize& fileSize) noexcept
         {
             DWORD high = 0;
-            DWORD low  = ::GetCompressedFileSize(fileName, &high);
+            DWORD low  = ::GetCompressedFileSizeW(fileName, &high);
             if (low != INVALID_FILE_SIZE || GetLastError() == NO_ERROR) {
                 fileSize = (static_cast<FileSize>(high) << 32) | low;
                 return Error::Success;
@@ -378,7 +378,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <seealso cref="SetAttributes"/>
         static ErrorCode GetAttributes(const FileName& fileName, DWORD& attributes) noexcept
         {
-            attributes = ::GetFileAttributes(fileName);
+            attributes = ::GetFileAttributesW(fileName);
 
             return attributes != INVALID_FILE_ATTRIBUTES ? Error::Success : Error::GetLastError();
         }
@@ -389,7 +389,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
         static ErrorCode GetAttributes(const FileName& fileName, WIN32_FILE_ATTRIBUTE_DATA& attributes) noexcept
         {
-            return Error::GetError(::GetFileAttributesEx(fileName, GetFileExInfoStandard, &attributes));
+            return Error::GetError(::GetFileAttributesExW(fileName, GetFileExInfoStandard, &attributes));
         }
 
         /// <summary><c>GetFileBandwidthReservation</c>.</summary>
@@ -659,7 +659,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         {
             CT_ASSERT(IsValid());
 
-            filePathLength = ::GetFinalPathNameByHandle(handle_, filePath, filePathLength, flags);
+            filePathLength = ::GetFinalPathNameByHandleW(handle_, filePath, filePathLength, flags);
 
             return filePathLength ? Error::Success : Error::GetLastError();
         }
@@ -681,7 +681,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// </remarks>
         static ErrorCode GetFullPath(FileName fileName, PathBuffer fullPath, DWORD& fullPathLength, PathBuffer* filePart) noexcept
         {
-            fullPathLength = ::GetFullPathName(fileName, fullPathLength, fullPath, filePart);
+            fullPathLength = ::GetFullPathNameW(fileName, fullPathLength, fullPath, filePart);
 
             return fullPathLength ? Error::Success : Error::GetLastError();
         }
@@ -697,7 +697,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <seealso cref="GetShortPath"/>
         static ErrorCode GetLongPath(FileName fileName, PathBuffer longPath, DWORD& longPathLength) noexcept
         {
-            longPathLength = ::GetLongPathName(fileName, longPath, longPathLength);
+            longPathLength = ::GetLongPathNameW(fileName, longPath, longPathLength);
 
             return longPathLength ? Error::Success : Error::GetLastError();
         }
@@ -715,7 +715,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <seealso cref="GetLongPath"/>
         static ErrorCode GetShortPath(FileName fileName, PathBuffer shortPath, DWORD& shortPathLength) noexcept
         {
-            shortPathLength = ::GetShortPathName(fileName, shortPath, shortPathLength);
+            shortPathLength = ::GetShortPathNameW(fileName, shortPath, shortPathLength);
 
             return shortPathLength ? Error::Success : Error::GetLastError();
         }
@@ -788,7 +788,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
         static ErrorCode Move(const FileName& existingFileName, const FileName& newFileName) noexcept
         {
-            return Error::GetError(::MoveFile(existingFileName, newFileName));
+            return Error::GetError(::MoveFileW(existingFileName, newFileName));
         }
 
         /// <summary><c>MoveFileExW</c> (<c>MOVEFILE_*</c> flags).</summary>
@@ -803,7 +803,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
         static ErrorCode Move(const FileName& existingFileName, const FileName& newFileName, DWORD flags) noexcept
         {
-            return Error::GetError(::MoveFileEx(existingFileName, newFileName, flags));
+            return Error::GetError(::MoveFileExW(existingFileName, newFileName, flags));
         }
 
         /// <summary><c>MoveFileWithProgressW</c>.</summary>
@@ -821,7 +821,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         static ErrorCode Move(const FileName& existingFileName, const FileName& newFileName, LPPROGRESS_ROUTINE progressRoutine, void* data,
                               DWORD flags) noexcept
         {
-            return Error::GetError(::MoveFileWithProgress(existingFileName, newFileName, progressRoutine, data, flags));
+            return Error::GetError(::MoveFileWithProgressW(existingFileName, newFileName, progressRoutine, data, flags));
         }
 
         /// <summary><c>SetFileAttributesW</c>.</summary>
@@ -834,7 +834,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <seealso cref="GetAttributes"/>
         static ErrorCode SetAttributes(const FileName& fileName, DWORD attributes) noexcept
         {
-            return Error::GetError(::SetFileAttributes(fileName, attributes));
+            return Error::GetError(::SetFileAttributesW(fileName, attributes));
         }
 
         /// <summary><c>SetFileCompletionNotificationModes</c>.</summary>
@@ -953,7 +953,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         {
             CT_ASSERT(IsValid());
 
-            return Error::GetError(::SetFileShortName(handle_, shortName));
+            return Error::GetError(::SetFileShortNameW(handle_, shortName));
         }
 
         /// <summary><c>SetFileValidData</c>: extends the valid data without zeroing it.</summary>

@@ -41,7 +41,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// </remarks>
     /// <seealso cref="SemaphoreLock"/>
     /// <seealso cref="SpinSemaphoreLock"/>
-    template <SuspensionKind _SuspensionKind>
+    export template <SuspensionKind _SuspensionKind>
     class _Semaphore : protected Suspendable<_SuspensionKind, _Semaphore<_SuspensionKind>>
     {
     public:
@@ -58,10 +58,10 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         /// <seealso cref="Wait"/>
         void Release(std::size_t count = 1) noexcept
         {
-            // release: publishes the releaser's writes to the task that takes the permit. The RMW
-            // also orders this add before TryResume reads the waiter list (see
-            // SuspendableBase<Single>::SetSuspendedTask for the pairing and its x86 assumption).
-            count_.fetch_add(count, std::memory_order_release);
+            // Publishes the releaser's writes to the task that takes the permit, and orders this add
+            // before TryResume reads the waiter list: the signalling side of the pairing in
+            // SuspendableBase<Single>::SetSuspendedTask, seq_cst on both sides (free on x64).
+            count_.fetch_add(count, std::memory_order_seq_cst);
             TryResume();
         }
 
@@ -128,7 +128,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
 
                 // resume a task or increment the release count (was decremented by TryWait() before)
                 if (!this->ResumeNext())
-                    count_.fetch_add(1, std::memory_order::release);
+                    count_.fetch_add(1, std::memory_order_release);
             }
         }
 
@@ -203,7 +203,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         /// <param name="spinCount">
         /// The maximum number of spin attempts (<c>0</c>: <see cref="_Semaphore::Wait"/> at once).
         /// </param>
-        explicit SpinSemaphoreLock(_SemaphoreType& semaphore, unsigned long spinCount) noexcept : semaphore_(semaphore)
+        explicit SpinSemaphoreLock(_SemaphoreType& semaphore, std::uint32_t spinCount) noexcept : semaphore_(semaphore)
         {
             // spinCount stays non-zero exactly when TryWait succeeded
             while (spinCount) {

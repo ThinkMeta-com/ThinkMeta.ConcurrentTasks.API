@@ -49,7 +49,8 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
         /// the task object.
         /// </remarks>
         /// <seealso cref="SetNotifyCallback"/>
-        // An override must call Task::OnTaskExited and must not touch the object after it.
+        // An override must tell GetNotifyCallback() as its last action and must not touch the
+        // object after it (see _WaitableTask::OnTaskExited).
         void OnTaskExited() noexcept override
         {
             if (notifyTaskStateChange_)
@@ -194,7 +195,8 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
         /// <typeparam name="FF">Type of the argument; <typeparamref name="F"/> must be constructible from it.</typeparam>
         /// <param name="func">Copied or moved into <typeparamref name="F"/>.</param>
         /// <param name="notifyTaskStateChange">Told when the task exits; may be <c>nullptr</c>.</param>
-        template <std::invocable FF>
+        template <typename FF>
+            requires std::constructible_from<F, FF&&>
         explicit LambdaTask(FF&& func, INotifyTaskStateChange* notifyTaskStateChange = nullptr) noexcept : Task(notifyTaskStateChange), func_(std::forward<FF>(func)) {}
 
         /// <summary>Calls the stored callable.</summary>

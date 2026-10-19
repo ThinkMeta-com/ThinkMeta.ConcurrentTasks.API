@@ -17,6 +17,7 @@ module;
 #include <cstdint>
 #include <cstring>
 #include <cwchar>
+#include <new>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 
@@ -35,35 +36,36 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// <summary>How an <see cref="OrderedFileWriter"/> writes: granule, writes at once, copy queue sizes.</summary>
     /// <remarks>
     /// <see cref="OrderedFileWriter::Open"/> corrects out-of-range values instead of failing: <see cref="segmentSize"/> is
-    /// raised to at least 64 KB and rounded up to a multiple of 64 KB, <see cref="writesInFlight"/> is clamped to
+    /// raised to at least 64 KB, rounded up to a multiple of 64 KB and limited to
+    /// <see cref="OrderedFileWriter::MaxSegmentSize"/>, <see cref="writesInFlight"/> is clamped to
     /// 1..<see cref="OrderedFileWriter::MaxWritesInFlight"/>, <see cref="batchRing"/> and <see cref="jobRing"/> are raised
     /// to at least 2.
     /// </remarks>
     export struct OrderedFileWriterSettings {
         /// <summary>Bytes per write; memory is committed and decommitted in the same unit.</summary>
-        std::uint64_t segmentSize = std::uint64_t{4} << 20; // write, commit and decommit granule (multiple of 64 KB)
+        std::uint64_t segmentSize = std::uint64_t{4} << 20;
 
         /// <summary>Overlapped writes the writer task keeps in flight.</summary>
-        std::uint32_t writesInFlight = 4;                      // at most MaxWritesInFlight
+        std::uint32_t writesInFlight = 4;
 
         /// <summary>Batches submitted to the copy tasks and not yet retired.</summary>
         /// <remarks>The producer waits (and helps) when the ring is full.</remarks>
-        std::uint32_t batchRing = 256; // batches handed to the copy tasks, not yet finished
+        std::uint32_t batchRing = 256;
 
         /// <summary><see cref="OrderedFileWriter::WriteDeferred"/> copies not yet retired.</summary>
         /// <remarks>A batch is split at half of it; the producer waits when the ring is full.</remarks>
-        std::uint32_t jobRing = 65536; // copies in those batches
+        std::uint32_t jobRing = 65536;
 
         /// <summary>Open the file with <c>FILE_FLAG_NO_BUFFERING</c>.</summary>
         /// <remarks>The last write is padded to whole sectors and <see cref="OrderedFileWriter::Close"/> sets the exact size.</remarks>
-        bool unbuffered = false; // FILE_FLAG_NO_BUFFERING (the size is set at the end)
+        bool unbuffered = false;
     };
 
     /// <summary>Counters of a finished <see cref="OrderedFileWriter"/>.</summary>
     /// <seealso cref="OrderedFileWriter::Stats"/>
     export struct OrderedFileWriterStats {
         /// <summary>Bytes appended (the final file size).</summary>
-        std::uint64_t bytes = 0; // file size
+        std::uint64_t bytes = 0;
 
         /// <summary>Number of <see cref="OrderedFileWriter::WriteDeferred"/> calls that were recorded.</summary>
         std::uint64_t deferredCopies = 0;
@@ -73,13 +75,13 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
         /// <summary>Seconds the producer waited for a copy batch to finish.</summary>
         /// <remarks>It waits when a ring is full and in <see cref="OrderedFileWriter::Close"/>.</remarks>
-        double producerWaited = 0; // seconds the producer waited for copy slots
+        double producerWaited = 0;
 
         /// <summary>Seconds the writer task waited for writes to complete.</summary>
-        double writerWaited = 0; // seconds the writer task waited for writes to complete
+        double writerWaited = 0;
 
         /// <summary>Seconds the writer task spent inside the write calls.</summary>
-        double writerIssuing = 0; // seconds in the write calls (buffered writes copy into the cache synchronously)
+        double writerIssuing = 0;
     };
 
     /// <summary>An output file built front to back in memory, with the copying and writing done by other tasks.</summary>
@@ -110,8 +112,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// number of copy tasks, and wait for all tasks, the writer task included, to end before destroying the
     /// object (Close does not wait for that, see <see cref="Close"/>). Needs
     /// <see cref="EnableAsyncIo"/>. Producer calls are not thread-safe among themselves (one producer, a task
-    /// or a thread after <see cref="ConvertThreadToTask"/>), and they may suspend it: WriteDeferred, EndBatch
-    /// and LowestPendingSource can wait for or run copy batches, Close waits for the writer task.
+    /// or a thread after <see cref="ConvertThreadToTask"/>), and they may suspend it: WriteDeferred and
+    /// EndBatch can wait for or run copy batches, Close waits for the writer task.
     /// </para>
     /// <para>
     /// Errors: Open returns a Win32 error code; Write, WriteDeferred and WriteAt report nothing.
@@ -133,7 +135,11 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         static constexpr std::uint32_t MaxWritesInFlight = 16;
 
         /// <summary>Sector size the last unbuffered write is padded to.</summary>
-        static constexpr std::uint64_t SectorAlign = 4096;
+        static constexpr std::uint64_t SectorAlign = BulkIoOptions::SectorAlign;
+
+        /// <summary>Upper bound of <see cref="OrderedFileWriterSettings::segmentSize"/> (1 GB).</summary>
+        /// <remarks>One write transfers at most 4 GB.</remarks>
+        static constexpr std::uint64_t MaxSegmentSize = std::uint64_t{1} << 30;
 
         /// <summary>A copy task: runs batches until <see cref="StopCopyTasks"/>.</summary>
         /// <remarks>
@@ -231,7 +237,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                 settings_.writesInFlight = settings_.writesInFlight == 0 ? 1 : MaxWritesInFlight;
             if (settings_.segmentSize < 65536)
                 settings_.segmentSize = 65536;
-            settings_.segmentSize = RoundUp(settings_.segmentSize, 65536);
+            settings_.segmentSize = settings_.segmentSize > MaxSegmentSize ? MaxSegmentSize : RoundUp(settings_.segmentSize, 65536);
             if (settings_.batchRing < 2)
                 settings_.batchRing = 2;
             if (settings_.jobRing < 2)
@@ -240,7 +246,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             const auto length = wcslen(path) + 1;
             path_             = static_cast<wchar_t*>(HeapAlloc(GetProcessHeap(), 0, length * sizeof(wchar_t)));
             jobs_             = static_cast<Job*>(HeapAlloc(GetProcessHeap(), 0, settings_.jobRing * sizeof(Job)));
-            batches_          = static_cast<Batch*>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, settings_.batchRing * sizeof(Batch)));
+            batches_          = static_cast<Batch*>(HeapAlloc(GetProcessHeap(), 0, settings_.batchRing * sizeof(Batch)));
             if (path_ == nullptr || jobs_ == nullptr || batches_ == nullptr) {
                 failed_ = true;
                 return ERROR_NOT_ENOUGH_MEMORY;
@@ -345,10 +351,13 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             Submit();
             Retire();
             const std::uint64_t done = DonePrefix();
-            if (done / settings_.segmentSize > published_ / settings_.segmentSize)
-                writerWake_.Set();
-            published_ = done;
+            const bool          wake = done / settings_.segmentSize > published_ / settings_.segmentSize;
+            published_               = done;
+            // published before the writer is woken: woken first, it could read the old position,
+            // find nothing to do and sleep until the next segment boundary or Close
             doneTo_.store(done, std::memory_order_release);
+            if (wake)
+                writerWake_.Set();
         }
 
         /// <summary>Lowest source address the unfinished copies still read (<c>nullptr</c>: none).</summary>
@@ -452,9 +461,12 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             StopWriter();
             if (writeFailed_.load(std::memory_order_acquire))
                 failed_ = true;
+            // unbuffered: the last write was padded to whole sectors; cut the file to its size
+            if (settings_.unbuffered && Windows::Error::Failed(file_.SetSize(position_)))
+                failed_ = true;
             if (Windows::Error::Failed(file_.Close()))
                 failed_ = true;
-            if (settings_.unbuffered || patches_ != nullptr)
+            if (patches_ != nullptr)
                 Finalize();
             return !failed_;
         }
@@ -708,7 +720,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             return true;
         }
 
-        /// <summary>Sets the exact size and applies the patches.</summary>
+        /// <summary>Applies the patches.</summary>
         /// <remarks>Through a buffered handle after the last write.</remarks>
         void Finalize() noexcept
         {
@@ -716,12 +728,6 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             if (h == INVALID_HANDLE_VALUE) {
                 failed_ = true;
                 return;
-            }
-            if (settings_.unbuffered) {
-                LARGE_INTEGER end;
-                end.QuadPart = static_cast<long long>(position_);
-                if (!SetFilePointerEx(h, end, nullptr, FILE_BEGIN) || !SetEndOfFile(h))
-                    failed_ = true;
             }
             for (const Patch* patch = patches_; patch != nullptr; patch = patch->next) {
                 OVERLAPPED ov   = {};
@@ -776,7 +782,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         std::uint64_t                   issuedTo_     = 0;
         std::uint64_t                   issued_       = 0;
         std::uint64_t                   completed_    = 0;
-        WaitableAsyncFileIoRequest      requests_[MaxWritesInFlight];
+        // _s: the writer task is the only waiter and reuses a request right after its Wait, which
+        // the single-waiter event allows (the completion's Set is its last access to the request)
+        WaitableAsyncFileIoRequest_s    requests_[MaxWritesInFlight];
         Range                           ranges_[MaxWritesInFlight] = {};
 
         // statistics

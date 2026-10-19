@@ -139,6 +139,40 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
         bool                   endOfStream_ = false;
     };
 
+    // A sink that shrinks the file being read when the given block is requested, i.e. after the
+    // reader took the size and before it reads that block.
+    class ShrinkingWriteSequentialMemory : public VectorWriteSequentialMemory
+    {
+    public:
+        ShrinkingWriteSequentialMemory(const std::wstring& path, std::size_t shrinkAtBlock, std::uint64_t newSize)
+            : path_(path), shrinkAtBlock_(shrinkAtBlock), newSize_(newSize)
+        {
+        }
+
+        std::byte* RequestWriteMemory(std::size_t size) noexcept override
+        {
+            if (requests_++ == shrinkAtBlock_) {
+                HANDLE file = ::CreateFileW(path_.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (file != INVALID_HANDLE_VALUE) {
+                    LARGE_INTEGER position{};
+                    position.QuadPart = static_cast<LONGLONG>(newSize_);
+                    shrunk_           = ::SetFilePointerEx(file, position, nullptr, FILE_BEGIN) && ::SetEndOfFile(file);
+                    ::CloseHandle(file);
+                }
+            }
+            return VectorWriteSequentialMemory::RequestWriteMemory(size);
+        }
+
+        bool Shrunk() const noexcept { return shrunk_; }
+
+    private:
+        std::wstring  path_;
+        std::size_t   shrinkAtBlock_;
+        std::uint64_t newSize_;
+        std::size_t   requests_ = 0;
+        bool          shrunk_   = false;
+    };
+
     // A file of the given size with byte i = i * 13 + 5, written synchronously.
     static void WritePatternFile(const std::wstring& path, std::size_t size)
     {
@@ -750,6 +784,49 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
             const bool finished = WaitFor([&testPassed] { return testPassed.load(std::memory_order_acquire); }, std::chrono::seconds(30));
             Assert::IsTrue(finished, L"AsyncFile ReadFile out-of-memory test timed out or failed");
+
+            AsyncIo::DisableAsyncIo();
+            ::DeleteFileW(path.c_str());
+
+            scheduler.Stop();
+            ConvertTaskToThread();
+        }
+
+        TEST_METHOD(TestAsyncFileReadFileShrunkFileReportsEof)
+        {
+            ConvertThreadToTask();
+
+            SchedulerInfo schedulerInfo = {.numberOfThreads = 2};
+            ScopedScheduler scheduler(schedulerInfo);
+            scheduler.Start();
+
+            Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
+
+            const std::wstring path = GetTempFilePath();
+            static constexpr std::size_t BlockSize = 256 * 1024;
+            static constexpr std::size_t FileSize = 2 * BlockSize;
+            WritePatternFile(path, FileSize);
+
+            std::atomic<bool> testPassed{false};
+
+            auto ioTask = Tasks::Task::Create([&path, &testPassed]() {
+                // one read at a time; the file loses half of its last block before that block is read,
+                // so the read comes back short: ReadFile must report it, not publish a short stream as complete
+                ShrinkingWriteSequentialMemory sink(path, 1, FileSize - BlockSize / 2);
+                const auto err = AsyncIo::AsyncFile::ReadFile(const_cast<wchar_t*>(path.c_str()), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, &sink, AsyncIo::BulkIoOptions{BlockSize, 1});
+                Assert::IsTrue(sink.Shrunk(), L"The test could not shrink the file");
+                Assert::AreEqual(static_cast<unsigned long>(ERROR_HANDLE_EOF), static_cast<unsigned long>(err), L"ReadFile did not report the short read");
+                Assert::IsTrue(sink.IsEndOfStream(), L"ReadFile did not end the stream after the short read");
+                Assert::AreEqual(BlockSize, sink.GetWrittenSize(), L"ReadFile published the short block");
+
+                testPassed.store(true, std::memory_order_release);
+            });
+
+            scheduler.AddTask(&ioTask, TaskPriority::Normal);
+
+            const bool finished = WaitFor([&testPassed] { return testPassed.load(std::memory_order_acquire); }, std::chrono::seconds(30));
+            Assert::IsTrue(finished, L"AsyncFile ReadFile shrunk-file test timed out or failed");
 
             AsyncIo::DisableAsyncIo();
             ::DeleteFileW(path.c_str());

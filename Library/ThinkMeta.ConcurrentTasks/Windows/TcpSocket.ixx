@@ -12,9 +12,6 @@ module;
 
 #include <WinSock2.h>
 #include <Windows.h>
-#include <MSWSock.h>
-#include <ws2ipdef.h>
-#include <concepts>
 #include "Defs.h"
 
 export module ThinkMeta.ConcurrentTasks.Windows.TcpSocket;
@@ -22,33 +19,41 @@ export module ThinkMeta.ConcurrentTasks.Windows.TcpSocket;
 export import ThinkMeta.ConcurrentTasks.Windows.IpSocket;
 
 namespace ThinkMeta::ConcurrentTasks::Windows {
-    /// <summary>The TCP part common to IPv4 and IPv6.</summary>
+    // Unlike IpSocketBase, no per-version specializations: nothing TCP adds here depends on the
+    // IP version.
+
+    /// <summary>An IPv4 or IPv6 TCP socket.</summary>
     /// <typeparam name="_IpVersion">The IP version: <see cref="IpVersion::V4"/> or <see cref="IpVersion::V6"/>.</typeparam>
     /// <typeparam name="_BaseSocket">
     /// The socket class built on: <see cref="Socket"/> (blocking calls) or <see cref="AsyncIo::AsyncSocket"/>.
     /// </typeparam>
     /// <remarks>
-    /// Available on every <see cref="TcpSocketBase"/> (<see cref="TcpSocket"/>, <see cref="AsyncIo::AsyncTcpSocket"/>).
+    /// Plain (<see cref="Socket"/>) or asynchronous (<see cref="AsyncIo::AsyncSocket"/>). Owns its socket
+    /// like Socket.
     /// </remarks>
-    export template <IpVersionType _IpVersion, SocketType _BaseSocket = Socket>
-    class CT_NOVTABLE _TcpSocket : public IpSocketBase<_IpVersion, _BaseSocket>
+    /// <seealso cref="TcpSocket"/>
+    /// <seealso cref="AsyncIo::AsyncTcpSocket"/>
+    export template <IpVersionType _IpVersion, SocketType _BaseSocket>
+    class TcpSocketBase : public IpSocketBase<_IpVersion, _BaseSocket>
     {
         using _IpSocketBase = IpSocketBase<_IpVersion, _BaseSocket>;
         using _Traits = IpTraits<_IpVersion>;
 
-    protected:
-        _TcpSocket() noexcept = default;
-        _TcpSocket(_TcpSocket&& other) noexcept : _IpSocketBase(std::move(other)) {}
-
-        _TcpSocket& operator=(_TcpSocket&& other) noexcept
-        {
-            _IpSocketBase::operator=(std::move(other));
-            return *this;
-        }
-
     public:
         /// <summary>The version's socket address type (<c>sockaddr_in</c> or <c>sockaddr_in6</c>).</summary>
         using SockAddr = typename _Traits::SockAddr;
+
+        /// <summary>Creates an object without a socket.</summary>
+        TcpSocketBase() noexcept = default;
+
+        /// <summary>Takes over <paramref name="other"/>'s socket; other is left without one.</summary>
+        /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
+        TcpSocketBase(TcpSocketBase&& other) noexcept = default;
+
+        /// <summary>Takes over <paramref name="other"/>'s socket; a socket this object already holds is closed first.</summary>
+        /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
+        /// <returns>This object.</returns>
+        TcpSocketBase& operator=(TcpSocketBase&& other) noexcept = default;
 
         // Keep the base's Create(addressFamily, type, protocol, ...) visible next to the TCP overload.
         using _IpSocketBase::Create;
@@ -74,70 +79,6 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         WinsockErrorCode Create(WSAPROTOCOL_INFO* protocolInfo = nullptr, GROUP g = 0, DWORD flags = 0) noexcept
         {
             return this->Create(_Traits::AddressFamily, SOCK_STREAM, IPPROTO_TCP, protocolInfo, g, flags);
-        }
-    };
-
-    /// <summary>An IPv4 or IPv6 TCP socket.</summary>
-    /// <typeparam name="_IpVersion">The IP version: <see cref="IpVersion::V4"/> or <see cref="IpVersion::V6"/>.</typeparam>
-    /// <typeparam name="_BaseSocket">
-    /// The socket class built on: <see cref="Socket"/> (blocking calls) or <see cref="AsyncIo::AsyncSocket"/>.
-    /// </typeparam>
-    /// <remarks>
-    /// Plain (<see cref="Socket"/>) or asynchronous (<see cref="AsyncIo::AsyncSocket"/>). Owns its socket
-    /// like Socket.
-    /// </remarks>
-    /// <seealso cref="TcpSocket"/>
-    /// <seealso cref="AsyncIo::AsyncTcpSocket"/>
-    export template <IpVersionType _IpVersion, SocketType _BaseSocket>
-    class TcpSocketBase;
-
-    template <SocketType _BaseSocket>
-    class TcpSocketBase<IpVersion::V4, _BaseSocket> : public _TcpSocket<IpVersion::V4, _BaseSocket>
-    {
-        using _Base = _TcpSocket<IpVersion::V4, _BaseSocket>;
-        using _Traits = IpTraits<IpVersion::V4>;
-        static const int OptionLevel = _Traits::OptionLevel;
-
-    public:
-        /// <summary>Creates an object without a socket.</summary>
-        TcpSocketBase() noexcept = default;
-
-        /// <summary>Takes over <paramref name="other"/>'s socket; other is left without one.</summary>
-        /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
-        TcpSocketBase(TcpSocketBase&& other) noexcept : _Base(std::move(other)) {}
-
-        /// <summary>Takes over <paramref name="other"/>'s socket; a socket this object already holds is closed first.</summary>
-        /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
-        /// <returns>This object.</returns>
-        TcpSocketBase& operator=(TcpSocketBase&& other) noexcept
-        {
-            _Base::operator=(std::move(other));
-            return *this;
-        }
-    };
-
-    template <SocketType _BaseSocket>
-    class TcpSocketBase<IpVersion::V6, _BaseSocket> : public _TcpSocket<IpVersion::V6, _BaseSocket>
-    {
-        using _Base = _TcpSocket<IpVersion::V6, _BaseSocket>;
-        using _Traits = IpTraits<IpVersion::V6>;
-        static const int OptionLevel = _Traits::OptionLevel;
-
-    public:
-        /// <summary>Creates an object without a socket.</summary>
-        TcpSocketBase() noexcept = default;
-
-        /// <summary>Takes over <paramref name="other"/>'s socket; other is left without one.</summary>
-        /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
-        TcpSocketBase(TcpSocketBase&& other) noexcept : _Base(std::move(other)) {}
-
-        /// <summary>Takes over <paramref name="other"/>'s socket; a socket this object already holds is closed first.</summary>
-        /// <param name="other">The object whose socket is taken over; it holds no socket afterwards.</param>
-        /// <returns>This object.</returns>
-        TcpSocketBase& operator=(TcpSocketBase&& other) noexcept
-        {
-            _Base::operator=(std::move(other));
-            return *this;
         }
     };
 

@@ -107,7 +107,6 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         {
             CT_ASSERT(!IsValid());
 
-            Close();
             auto error = SocketBase::Create(addressFamily, type, protocol, protocolInfo, g, flags | WSA_FLAG_OVERLAPPED);
             // A socket that cannot be associated would never see its completions: close it again.
             if (IsValid() && !AssociateHandleWithIoCompletionPort(reinterpret_cast<HANDLE>(GetSocket()), &AsyncIoRequestCompleted)) {
@@ -154,10 +153,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         {
             CT_ASSERT(bytesReceived);
 
-            auto success = SocketBase::AcceptAsync(acceptSocket, outputBuffer, receiveDataLength, localAddressLength, remoteAddressLength, bytesReceived,
-                                                   asyncIoRequest.GetOverlapped());
-
-            return AsyncIoOperationErrorCode(success, *bytesReceived, asyncIoRequest);
+            auto error = SocketBase::AcceptAsync(acceptSocket, outputBuffer, receiveDataLength, localAddressLength, remoteAddressLength, bytesReceived,
+                                                 asyncIoRequest.GetOverlapped());
+            return HandleCompletedRequest(error, bytesReceived, asyncIoRequest);
         }
 
         /// <summary>Accepts a connection on this listening socket (<c>AcceptEx</c>).</summary>
@@ -232,9 +230,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         WinsockErrorCode ConnectAsync(const _SockAddr* addr, int addrSize, void* sendBuffer, DWORD sendDataLength, DWORD* bytesSent,
                                       AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto success = SocketBase::ConnectAsync(reinterpret_cast<const sockaddr*>(addr), addrSize, sendBuffer, sendDataLength, bytesSent,
-                                                    asyncIoRequest.GetOverlapped());
-            return AsyncIoOperationErrorCode(success, bytesSent ? *bytesSent : 0, asyncIoRequest);
+            auto  error = SocketBase::ConnectAsync(reinterpret_cast<const sockaddr*>(addr), addrSize, sendBuffer, sendDataLength, bytesSent,
+                                                   asyncIoRequest.GetOverlapped());
+            DWORD none  = 0; // without a count nothing was sent; no need to ask the operation
+            return HandleCompletedRequest(error, bytesSent ? bytesSent : &none, asyncIoRequest);
         }
 
         /// <summary>Connects with <c>ConnectEx</c>.</summary>
@@ -293,8 +292,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <seealso cref="Disconnect"/>
         WinsockErrorCode DisconnectAsync(AsyncSocketIoRequest& asyncIoRequest, DWORD flags = 0) noexcept
         {
-            auto success = SocketBase::DisconnectAsync(asyncIoRequest.GetOverlapped(), flags);
-            return AsyncIoOperationErrorCode(success, 0, asyncIoRequest);
+            auto  error = SocketBase::DisconnectAsync(asyncIoRequest.GetOverlapped(), flags);
+            DWORD none  = 0; // a disconnect transfers nothing
+            return HandleCompletedRequest(error, &none, asyncIoRequest);
         }
 
         /// <summary>Disconnects with <c>DisconnectEx</c>.</summary>
@@ -380,9 +380,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <seealso cref="AsyncSocketRecvIoRequest"/>
         WinsockErrorCode RecvAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, DWORD* flags, AsyncSocketRecvIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvAsync(buffers, bufferCount, bytesTransferred, flags, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(RecvAsync(buffers, bufferCount, bytesTransferred, flags, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Receives with <c>WSARecv</c>.</summary>
@@ -411,7 +409,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
             auto error = RecvAsync(buffers, bufferCount, bytesTransferred, flags, asyncIoRequest);
             error = WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
-            if (flags && WinsockError::Succeeded(error))
+            if (WinsockError::Succeeded(error))
                 *flags = asyncIoRequest.GetFlags();
             return error;
         }
@@ -437,9 +435,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <remarks>See the overload with flags.</remarks>
         WinsockErrorCode RecvAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvAsync(buffers, bufferCount, bytesTransferred, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(RecvAsync(buffers, bufferCount, bytesTransferred, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Receives with <c>WSARecv</c> without flags.</summary>
@@ -486,9 +482,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         WinsockErrorCode RecvAsync(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD* flags,
                                    AsyncSocketRecvIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(RecvAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Receives into one buffer with <c>WSARecv</c>.</summary>
@@ -516,7 +510,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
             auto error = RecvAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest);
             error = WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
-            if (flags && WinsockError::Succeeded(error))
+            if (WinsockError::Succeeded(error))
                 *flags = asyncIoRequest.GetFlags();
             return error;
         }
@@ -539,9 +533,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <remarks>See the <c>WSABUF</c> overload.</remarks>
         WinsockErrorCode RecvAsync(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(RecvAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Receives into one buffer with <c>WSARecv</c> without flags.</summary>
@@ -595,9 +587,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <seealso cref="Send"/>
         WinsockErrorCode SendAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, DWORD flags, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendAsync(buffers, bufferCount, bytesTransferred, flags, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(SendAsync(buffers, bufferCount, bytesTransferred, flags, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Sends with <c>WSASend</c>.</summary>
@@ -645,9 +635,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </returns>
         WinsockErrorCode SendAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendAsync(buffers, bufferCount, bytesTransferred, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(SendAsync(buffers, bufferCount, bytesTransferred, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Sends with <c>WSASend</c> without flags.</summary>
@@ -692,9 +680,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <remarks>The buffer must stay valid until completion.</remarks>
         WinsockErrorCode SendAsync(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD flags, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(SendAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Sends one buffer with <c>WSASend</c>.</summary>
@@ -740,9 +726,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <remarks>The buffer must stay valid until completion.</remarks>
         WinsockErrorCode SendAsync(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(SendAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Sends one buffer with <c>WSASend</c> without flags.</summary>
@@ -771,201 +755,70 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         using SocketBase::RecvFromAsync;
 
         /// <summary>Starts a <c>WSARecvFrom</c> without capturing the sender's address.</summary>
-        /// <param name="buffers">
-        /// Array of <paramref name="bufferCount"/> <c>WSABUF</c> structures describing the receive buffers. The array may be
-        /// temporary; the memory it describes must stay valid until the operation has completed.
-        /// </param>
-        /// <param name="bufferCount">Number of <c>WSABUF</c> structures in <paramref name="buffers"/>.</param>
-        /// <param name="bytesTransferred">Receives the bytes received on synchronous completion; may be <c>nullptr</c>.</param>
-        /// <param name="flags">Required. In: <c>MSG_*</c> flags for the call. The result flags (e.g. <c>MSG_PARTIAL</c>) are stored in
-        /// <paramref name="asyncIoRequest"/> (<see cref="AsyncSocketRecvIoRequest::GetFlags"/>) once the operation has completed.</param>
-        /// <param name="asyncIoRequest">
-        /// The caller-owned receive request that is completed with the operation's result and keeps its result flags. It must
-        /// not be in use by another operation and must stay valid and must not move until it has completed.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::Pending"/> or the WSA error (see the
-        /// class remarks).
-        /// </returns>
-        /// <seealso cref="RecvFrom"/>
-        /// <seealso cref="AsyncSocketRecvIoRequest"/>
+        /// <remarks>Without an address the same as <see cref="RecvAsync"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="RecvAsync"/>
         WinsockErrorCode RecvFromAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, DWORD* flags,
                                        AsyncSocketRecvIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvFromAsync(buffers, bufferCount, bytesTransferred, flags, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return RecvAsync(buffers, bufferCount, bytesTransferred, flags, asyncIoRequest);
         }
 
         /// <summary>Receives with <c>WSARecvFrom</c>.</summary>
-        /// <param name="buffers">Array of <paramref name="bufferCount"/> <c>WSABUF</c> structures describing the receive buffers.</param>
-        /// <param name="bufferCount">Number of <c>WSABUF</c> structures in <paramref name="buffers"/>.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes received once the operation has completed (<c>0</c> on failure); may be <c>nullptr</c>.
-        /// </param>
-        /// <param name="flags">Required. In: <c>MSG_*</c> flags for the call; out on success: the result flags (e.g. <c>MSG_PARTIAL</c>).</param>
-        /// <param name="timeout">
-        /// Maximum time to wait; <see cref="Duration::Infinite"/> (the default) waits without limit. A finite timeout needs
-        /// <see cref="EnableTimers"/>; on expiry the operation is cancelled.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
-        /// </returns>
-        /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
-        /// <seealso cref="RecvFromAsync"/>
+        /// <remarks>Without an address the same as <see cref="Recv"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="Recv"/>
         WinsockErrorCode RecvFrom(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, DWORD* flags, Duration timeout = Duration::Infinite()) noexcept
         {
-            WaitableAsyncSocketRecvIoRequest_s asyncIoRequest(GetSocket());
-
-            auto error = RecvFromAsync(buffers, bufferCount, bytesTransferred, flags, asyncIoRequest);
-            error = WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
-            if (flags && WinsockError::Succeeded(error))
-                *flags = asyncIoRequest.GetFlags();
-            return error;
+            return Recv(buffers, bufferCount, bytesTransferred, flags, timeout);
         }
 
         /// <summary>Starts a <c>WSARecvFrom</c> without flags or sender address.</summary>
-        /// <param name="buffers">
-        /// Array of <paramref name="bufferCount"/> <c>WSABUF</c> structures describing the receive buffers. The array may be
-        /// temporary; the memory it describes must stay valid until the operation has completed.
-        /// </param>
-        /// <param name="bufferCount">Number of <c>WSABUF</c> structures in <paramref name="buffers"/>.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes received on synchronous completion; may be <c>nullptr</c> (the request then takes
-        /// the count from the completed operation).
-        /// </param>
-        /// <param name="asyncIoRequest">
-        /// The caller-owned request that is completed with the operation's result. It must not be in use by another operation
-        /// and must stay valid and must not move until it has completed.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::Pending"/> or the WSA error (see the
-        /// class remarks).
-        /// </returns>
+        /// <remarks>Without an address the same as <see cref="RecvAsync"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="RecvAsync"/>
         WinsockErrorCode RecvFromAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvFromAsync(buffers, bufferCount, bytesTransferred, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return RecvAsync(buffers, bufferCount, bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Receives with <c>WSARecvFrom</c> without flags or sender address.</summary>
-        /// <param name="buffers">Array of <paramref name="bufferCount"/> <c>WSABUF</c> structures describing the receive buffers.</param>
-        /// <param name="bufferCount">Number of <c>WSABUF</c> structures in <paramref name="buffers"/>.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes received once the operation has completed (<c>0</c> on failure); may be <c>nullptr</c>.
-        /// </param>
-        /// <param name="timeout">
-        /// Maximum time to wait; <see cref="Duration::Infinite"/> (the default) waits without limit. A finite timeout needs
-        /// <see cref="EnableTimers"/>; on expiry the operation is cancelled.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
-        /// </returns>
-        /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
+        /// <remarks>Without an address the same as <see cref="Recv"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="Recv"/>
         WinsockErrorCode RecvFrom(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
         {
-            WaitableAsyncSocketIoRequest_s asyncIoRequest;
-
-            auto error = RecvFromAsync(buffers, bufferCount, bytesTransferred, asyncIoRequest);
-            return WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
+            return Recv(buffers, bufferCount, bytesTransferred, timeout);
         }
 
         /// <summary>Starts a <c>WSARecvFrom</c> into one buffer without capturing the sender's address.</summary>
-        /// <param name="buffer">The receive buffer; must stay valid until the operation has completed.</param>
-        /// <param name="bufferSize">Size of <paramref name="buffer"/> in bytes.</param>
-        /// <param name="bytesTransferred">Receives the bytes received on synchronous completion; may be <c>nullptr</c>.</param>
-        /// <param name="flags">Required. In: <c>MSG_*</c> flags for the call. The result flags (e.g. <c>MSG_PARTIAL</c>) are stored in
-        /// <paramref name="asyncIoRequest"/> (<see cref="AsyncSocketRecvIoRequest::GetFlags"/>) once the operation has completed.</param>
-        /// <param name="asyncIoRequest">
-        /// The caller-owned receive request that is completed with the operation's result and keeps its result flags. It must
-        /// not be in use by another operation and must stay valid and must not move until it has completed.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::Pending"/> or the WSA error (see the
-        /// class remarks).
-        /// </returns>
+        /// <remarks>Without an address the same as <see cref="RecvAsync"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="RecvAsync"/>
         WinsockErrorCode RecvFromAsync(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD* flags,
                                    AsyncSocketRecvIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvFromAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return RecvAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest);
         }
 
         /// <summary>Receives into one buffer with <c>WSARecvFrom</c>.</summary>
-        /// <param name="buffer">The receive buffer.</param>
-        /// <param name="bufferSize">Size of <paramref name="buffer"/> in bytes.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes received once the operation has completed (<c>0</c> on failure); may be <c>nullptr</c>.
-        /// </param>
-        /// <param name="flags">Required. In: <c>MSG_*</c> flags for the call; out on success: the result flags (e.g. <c>MSG_PARTIAL</c>).</param>
-        /// <param name="timeout">
-        /// Maximum time to wait; <see cref="Duration::Infinite"/> (the default) waits without limit. A finite timeout needs
-        /// <see cref="EnableTimers"/>; on expiry the operation is cancelled.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
-        /// </returns>
-        /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
+        /// <remarks>Without an address the same as <see cref="Recv"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="Recv"/>
         WinsockErrorCode RecvFrom(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD* flags,
                                   Duration timeout = Duration::Infinite()) noexcept
         {
-            WaitableAsyncSocketRecvIoRequest_s asyncIoRequest(GetSocket());
-
-            auto error = RecvFromAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest);
-            error = WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
-            if (flags && WinsockError::Succeeded(error))
-                *flags = asyncIoRequest.GetFlags();
-            return error;
+            return Recv(buffer, bufferSize, bytesTransferred, flags, timeout);
         }
 
         /// <summary>Starts a <c>WSARecvFrom</c> into one buffer without flags or sender address.</summary>
-        /// <param name="buffer">The receive buffer; must stay valid until the operation has completed.</param>
-        /// <param name="bufferSize">Size of <paramref name="buffer"/> in bytes.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes received on synchronous completion; may be <c>nullptr</c> (the request then takes
-        /// the count from the completed operation).
-        /// </param>
-        /// <param name="asyncIoRequest">
-        /// The caller-owned request that is completed with the operation's result. It must not be in use by another operation
-        /// and must stay valid and must not move until it has completed.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::Pending"/> or the WSA error (see the
-        /// class remarks).
-        /// </returns>
+        /// <remarks>Without an address the same as <see cref="RecvAsync"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="RecvAsync"/>
         WinsockErrorCode RecvFromAsync(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvFromAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return RecvAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Receives into one buffer with <c>WSARecvFrom</c> without flags or sender address.</summary>
-        /// <param name="buffer">The receive buffer.</param>
-        /// <param name="bufferSize">Size of <paramref name="buffer"/> in bytes.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes received once the operation has completed (<c>0</c> on failure); may be <c>nullptr</c>.
-        /// </param>
-        /// <param name="timeout">
-        /// Maximum time to wait; <see cref="Duration::Infinite"/> (the default) waits without limit. A finite timeout needs
-        /// <see cref="EnableTimers"/>; on expiry the operation is cancelled.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
-        /// </returns>
-        /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
+        /// <remarks>Without an address the same as <see cref="Recv"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="Recv"/>
         WinsockErrorCode RecvFrom(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
         {
-            WaitableAsyncSocketIoRequest_s asyncIoRequest;
-
-            auto error = RecvFromAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest);
-            return WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
+            return Recv(buffer, bufferSize, bytesTransferred, timeout);
         }
 
         /// <summary>Starts a <c>WSARecvFrom</c> with the sender's address.</summary>
@@ -995,9 +848,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         WinsockErrorCode RecvFromAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, DWORD* flags, _SockAddr& addr, int& addrLength,
                                        AsyncSocketRecvIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvFromAsync(buffers, bufferCount, bytesTransferred, flags, addr, addrLength, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(RecvFromAsync(buffers, bufferCount, bytesTransferred, flags, addr, addrLength, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Receives with <c>WSARecvFrom</c>, with the sender's address.</summary>
@@ -1030,7 +881,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
             auto error = RecvFromAsync(buffers, bufferCount, bytesTransferred, flags, addr, addrLength, asyncIoRequest);
             error = WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
-            if (flags && WinsockError::Succeeded(error))
+            if (WinsockError::Succeeded(error))
                 *flags = asyncIoRequest.GetFlags();
             return error;
         }
@@ -1067,9 +918,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         WinsockErrorCode RecvFromAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, _SockAddr& addr, int& addrLength,
                                        AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvFromAsync(buffers, bufferCount, bytesTransferred, addr, addrLength, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(RecvFromAsync(buffers, bufferCount, bytesTransferred, addr, addrLength, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Receives with <c>WSARecvFrom</c> without flags, with the sender's address.</summary>
@@ -1127,9 +976,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         WinsockErrorCode RecvFromAsync(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD* flags, _SockAddr& addr, int& addrLength,
                                        AsyncSocketRecvIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvFromAsync(buffer, bufferSize, bytesTransferred, flags, addr, addrLength, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(RecvFromAsync(buffer, bufferSize, bytesTransferred, flags, addr, addrLength, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Receives into one buffer with <c>WSARecvFrom</c>, with the sender's address.</summary>
@@ -1162,7 +1009,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
             auto error = RecvFromAsync(buffer, bufferSize, bytesTransferred, flags, addr, addrLength, asyncIoRequest);
             error = WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
-            if (flags && WinsockError::Succeeded(error))
+            if (WinsockError::Succeeded(error))
                 *flags = asyncIoRequest.GetFlags();
             return error;
         }
@@ -1196,9 +1043,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         WinsockErrorCode RecvFromAsync(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, _SockAddr& addr, int& addrLength,
                                        AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvFromAsync(buffer, bufferSize, bytesTransferred, addr, addrLength, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(RecvFromAsync(buffer, bufferSize, bytesTransferred, addr, addrLength, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Receives into one buffer with <c>WSARecvFrom</c> without flags, with the sender's address.</summary>
@@ -1235,197 +1080,68 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         using SocketBase::SendToAsync;
 
         /// <summary>Starts a <c>WSASendTo</c> without address.</summary>
-        /// <param name="buffers">
-        /// Array of <paramref name="bufferCount"/> <c>WSABUF</c> structures describing the data to send. The array may be
-        /// temporary; the memory it describes must stay valid until the operation has completed.
-        /// </param>
-        /// <param name="bufferCount">Number of <c>WSABUF</c> structures in <paramref name="buffers"/>.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes sent on synchronous completion; may be <c>nullptr</c> (the request then takes
-        /// the count from the completed operation).
-        /// </param>
-        /// <param name="flags"><c>MSG_*</c> flags for <c>WSASendTo</c> (e.g. <c>MSG_DONTROUTE</c>, <c>MSG_OOB</c>); <c>0</c> for none.</param>
-        /// <param name="asyncIoRequest">
-        /// The caller-owned request that is completed with the operation's result. It must not be in use by another operation
-        /// and must stay valid and must not move until it has completed.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::Pending"/> or the WSA error (see the
-        /// class remarks).
-        /// </returns>
-        /// <remarks>Sends to the connected/default peer.</remarks>
-        /// <seealso cref="SendTo"/>
+        /// <remarks>Without an address the same as <see cref="SendAsync"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="SendAsync"/>
         WinsockErrorCode SendToAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, DWORD flags, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendToAsync(buffers, bufferCount, bytesTransferred, flags, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return SendAsync(buffers, bufferCount, bytesTransferred, flags, asyncIoRequest);
         }
 
         /// <summary>Sends with <c>WSASendTo</c> without address.</summary>
-        /// <param name="buffers">Array of <paramref name="bufferCount"/> <c>WSABUF</c> structures describing the data to send.</param>
-        /// <param name="bufferCount">Number of <c>WSABUF</c> structures in <paramref name="buffers"/>.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes sent once the operation has completed (<c>0</c> on failure); may be <c>nullptr</c>.
-        /// </param>
-        /// <param name="flags"><c>MSG_*</c> flags for <c>WSASendTo</c> (e.g. <c>MSG_DONTROUTE</c>, <c>MSG_OOB</c>); <c>0</c> for none.</param>
-        /// <param name="timeout">
-        /// Maximum time to wait; <see cref="Duration::Infinite"/> (the default) waits without limit. A finite timeout needs
-        /// <see cref="EnableTimers"/>; on expiry the operation is cancelled.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
-        /// </returns>
-        /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
-        /// <seealso cref="SendToAsync"/>
+        /// <remarks>Without an address the same as <see cref="Send"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="Send"/>
         WinsockErrorCode SendTo(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, DWORD flags, Duration timeout = Duration::Infinite()) noexcept
         {
-            WaitableAsyncSocketIoRequest_s asyncIoRequest;
-
-            auto error = SendToAsync(buffers, bufferCount, bytesTransferred, flags, asyncIoRequest);
-            return WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
+            return Send(buffers, bufferCount, bytesTransferred, flags, timeout);
         }
 
         /// <summary>Starts a <c>WSASendTo</c> without address or flags.</summary>
-        /// <param name="buffers">
-        /// Array of <paramref name="bufferCount"/> <c>WSABUF</c> structures describing the data to send. The array may be
-        /// temporary; the memory it describes must stay valid until the operation has completed.
-        /// </param>
-        /// <param name="bufferCount">Number of <c>WSABUF</c> structures in <paramref name="buffers"/>.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes sent on synchronous completion; may be <c>nullptr</c> (the request then takes
-        /// the count from the completed operation).
-        /// </param>
-        /// <param name="asyncIoRequest">
-        /// The caller-owned request that is completed with the operation's result. It must not be in use by another operation
-        /// and must stay valid and must not move until it has completed.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::Pending"/> or the WSA error (see the
-        /// class remarks).
-        /// </returns>
+        /// <remarks>Without an address the same as <see cref="SendAsync"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="SendAsync"/>
         WinsockErrorCode SendToAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendToAsync(buffers, bufferCount, bytesTransferred, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return SendAsync(buffers, bufferCount, bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Sends with <c>WSASendTo</c> without address or flags.</summary>
-        /// <param name="buffers">Array of <paramref name="bufferCount"/> <c>WSABUF</c> structures describing the data to send.</param>
-        /// <param name="bufferCount">Number of <c>WSABUF</c> structures in <paramref name="buffers"/>.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes sent once the operation has completed (<c>0</c> on failure); may be <c>nullptr</c>.
-        /// </param>
-        /// <param name="timeout">
-        /// Maximum time to wait; <see cref="Duration::Infinite"/> (the default) waits without limit. A finite timeout needs
-        /// <see cref="EnableTimers"/>; on expiry the operation is cancelled.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
-        /// </returns>
-        /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
+        /// <remarks>Without an address the same as <see cref="Send"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="Send"/>
         WinsockErrorCode SendTo(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
         {
-            WaitableAsyncSocketIoRequest_s asyncIoRequest;
-
-            auto error = SendToAsync(buffers, bufferCount, bytesTransferred, asyncIoRequest);
-            return WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
+            return Send(buffers, bufferCount, bytesTransferred, timeout);
         }
 
         /// <summary>Starts a <c>WSASendTo</c> of one buffer without address.</summary>
-        /// <param name="buffer">The data to send; must stay valid until the operation has completed.</param>
-        /// <param name="bufferSize">Number of bytes to send from <paramref name="buffer"/>.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes sent on synchronous completion; may be <c>nullptr</c> (the request then takes
-        /// the count from the completed operation).
-        /// </param>
-        /// <param name="flags"><c>MSG_*</c> flags for <c>WSASendTo</c> (e.g. <c>MSG_DONTROUTE</c>, <c>MSG_OOB</c>); <c>0</c> for none.</param>
-        /// <param name="asyncIoRequest">
-        /// The caller-owned request that is completed with the operation's result. It must not be in use by another operation
-        /// and must stay valid and must not move until it has completed.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::Pending"/> or the WSA error (see the
-        /// class remarks).
-        /// </returns>
+        /// <remarks>Without an address the same as <see cref="SendAsync"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="SendAsync"/>
         WinsockErrorCode SendToAsync(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD flags, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendToAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return SendAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest);
         }
 
         /// <summary>Sends one buffer with <c>WSASendTo</c> without address.</summary>
-        /// <param name="buffer">The data to send.</param>
-        /// <param name="bufferSize">Number of bytes to send from <paramref name="buffer"/>.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes sent once the operation has completed (<c>0</c> on failure); may be <c>nullptr</c>.
-        /// </param>
-        /// <param name="flags"><c>MSG_*</c> flags for <c>WSASendTo</c> (e.g. <c>MSG_DONTROUTE</c>, <c>MSG_OOB</c>); <c>0</c> for none.</param>
-        /// <param name="timeout">
-        /// Maximum time to wait; <see cref="Duration::Infinite"/> (the default) waits without limit. A finite timeout needs
-        /// <see cref="EnableTimers"/>; on expiry the operation is cancelled.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
-        /// </returns>
-        /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
+        /// <remarks>Without an address the same as <see cref="Send"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="Send"/>
         WinsockErrorCode SendTo(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD flags,
                                 Duration timeout = Duration::Infinite()) noexcept
         {
-            WaitableAsyncSocketIoRequest_s asyncIoRequest;
-
-            auto error = SendToAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest);
-            return WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
+            return Send(buffer, bufferSize, bytesTransferred, flags, timeout);
         }
 
         /// <summary>Starts a <c>WSASendTo</c> of one buffer without address or flags.</summary>
-        /// <param name="buffer">The data to send; must stay valid until the operation has completed.</param>
-        /// <param name="bufferSize">Number of bytes to send from <paramref name="buffer"/>.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes sent on synchronous completion; may be <c>nullptr</c> (the request then takes
-        /// the count from the completed operation).
-        /// </param>
-        /// <param name="asyncIoRequest">
-        /// The caller-owned request that is completed with the operation's result. It must not be in use by another operation
-        /// and must stay valid and must not move until it has completed.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::Pending"/> or the WSA error (see the
-        /// class remarks).
-        /// </returns>
+        /// <remarks>Without an address the same as <see cref="SendAsync"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="SendAsync"/>
         WinsockErrorCode SendToAsync(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendToAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return SendAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Sends one buffer with <c>WSASendTo</c> without address or flags.</summary>
-        /// <param name="buffer">The data to send.</param>
-        /// <param name="bufferSize">Number of bytes to send from <paramref name="buffer"/>.</param>
-        /// <param name="bytesTransferred">
-        /// Receives the bytes sent once the operation has completed (<c>0</c> on failure); may be <c>nullptr</c>.
-        /// </param>
-        /// <param name="timeout">
-        /// Maximum time to wait; <see cref="Duration::Infinite"/> (the default) waits without limit. A finite timeout needs
-        /// <see cref="EnableTimers"/>; on expiry the operation is cancelled.
-        /// </param>
-        /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
-        /// </returns>
-        /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
+        /// <remarks>Without an address the same as <see cref="Send"/> with the same arguments, which it calls.</remarks>
+        /// <seealso cref="Send"/>
         WinsockErrorCode SendTo(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
         {
-            WaitableAsyncSocketIoRequest_s asyncIoRequest;
-
-            auto error = SendToAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest);
-            return WaitForAsyncIoOperation(error, bytesTransferred, asyncIoRequest, timeout);
+            return Send(buffer, bufferSize, bytesTransferred, timeout);
         }
 
         /// <summary>Starts a <c>WSASendTo</c> to an address.</summary>
@@ -1459,9 +1175,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         WinsockErrorCode SendToAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, DWORD flags, const _SockAddr& addr,
                                      AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendToAsync(buffers, bufferCount, bytesTransferred, flags, addr, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(SendToAsync(buffers, bufferCount, bytesTransferred, flags, addr, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Sends to an address with <c>WSASendTo</c>.</summary>
@@ -1524,9 +1238,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         template <Windows::SockAddrType _SockAddr>
         WinsockErrorCode SendToAsync(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, const _SockAddr& addr, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendToAsync(buffers, bufferCount, bytesTransferred, addr, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(SendToAsync(buffers, bufferCount, bytesTransferred, addr, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Sends to an address with <c>WSASendTo</c> without flags.</summary>
@@ -1587,9 +1299,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         WinsockErrorCode SendToAsync(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD flags, const _SockAddr& addr,
                                      AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendToAsync(buffer, bufferSize, bytesTransferred, flags, addr, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(SendToAsync(buffer, bufferSize, bytesTransferred, flags, addr, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Sends one buffer to an address with <c>WSASendTo</c>.</summary>
@@ -1649,9 +1359,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         template <Windows::SockAddrType _SockAddr>
         WinsockErrorCode SendToAsync(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, const _SockAddr& addr, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendToAsync(buffer, bufferSize, bytesTransferred, addr, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(SendToAsync(buffer, bufferSize, bytesTransferred, addr, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Sends one buffer to an address with <c>WSASendTo</c> without flags.</summary>
@@ -1706,9 +1414,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <seealso cref="RecvMsg"/>
         WinsockErrorCode RecvMsgAsync(WSAMSG* msg, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(RecvMsgAsync(msg, bytesTransferred, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(RecvMsgAsync(msg, bytesTransferred, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Receives with <c>WSARecvMsg</c>.</summary>
@@ -1750,9 +1456,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <seealso cref="SendMsg"/>
         WinsockErrorCode SendMsgAsync(WSAMSG* msg, DWORD flags, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            auto error = WinsockError::GetError(SendMsgAsync(msg, flags, bytesTransferred, asyncIoRequest.GetOverlapped()));
-            HandleCompletedRequest(error, bytesTransferred, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(SendMsgAsync(msg, flags, bytesTransferred, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
         }
 
         /// <summary>Sends with <c>WSASendMsg</c>.</summary>
@@ -1801,9 +1505,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         WinsockErrorCode TransmitFileAsync(HANDLE file, DWORD bytesToWrite, DWORD bytesPerSend, TRANSMIT_FILE_BUFFERS* transmitBuffers,
                                            AsyncSocketIoRequest& asyncIoRequest, DWORD flags = 0) noexcept
         {
-            auto error = SocketBase::TransmitFileAsync(file, bytesToWrite, bytesPerSend, transmitBuffers, asyncIoRequest.GetOverlapped(), flags);
-            HandleCompletedRequest(error, nullptr, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(SocketBase::TransmitFileAsync(file, bytesToWrite, bytesPerSend, transmitBuffers, asyncIoRequest.GetOverlapped(), flags), nullptr, asyncIoRequest);
         }
 
         /// <summary>Sends a file with <c>TransmitFile</c>.</summary>
@@ -1855,9 +1557,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         WinsockErrorCode TransmitPacketsAsync(TRANSMIT_PACKETS_ELEMENT* packetArray, DWORD elementCount, DWORD transmitSize,
                                               AsyncSocketIoRequest& asyncIoRequest, DWORD flags = 0) noexcept
         {
-            auto error = SocketBase::TransmitPacketsAsync(packetArray, elementCount, transmitSize, asyncIoRequest.GetOverlapped(), flags);
-            HandleCompletedRequest(error, nullptr, asyncIoRequest);
-            return error;
+            return HandleCompletedRequest(SocketBase::TransmitPacketsAsync(packetArray, elementCount, transmitSize, asyncIoRequest.GetOverlapped(), flags), nullptr, asyncIoRequest);
         }
 
         /// <summary>Sends packets with <c>TransmitPackets</c>.</summary>
@@ -1884,39 +1584,19 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             return WaitForAsyncIoOperation(error, nullptr, asyncIoRequest, timeout);
         }
 
-    private:
-        static WinsockErrorCode AsyncIoOperationErrorCode(WinsockErrorCode error, DWORD bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
-        {
-            // 'error' is the WinsockErrorCode returned by the base-class *Async methods (via GetAsyncError):
-            //   Success           -> the operation completed synchronously
-            //   WSA_IO_PENDING    -> the operation is in flight; the IOCP thread will complete it later
-            //   any other value   -> the operation failed synchronously
-            // Only a synchronous success may be reported as completed immediately. A pending operation
-            // MUST be returned as pending so WaitForAsyncIoOperation actually waits for the completion
-            // packet; otherwise the request object (often stack-allocated) is destroyed while its
-            // OVERLAPPED is still queued, leaving the IOCP thread to dereference a dangling pointer.
-            if (WinsockError::Succeeded(error)) {
-                asyncIoRequest.OnRequestCompletedImmediately(bytesTransferred);
-                return WinsockError::Success;
-            }
-
-            return error;
-        }
-
     protected:
         /// <summary>Finishes the start of an operation.</summary>
         /// <typeparam name="_Request">
         /// The request type (<see cref="AsyncSocketIoRequestType"/>); a receive request (<see cref="AsyncSocketRecvIoRequest"/>)
-        /// also gets its result flags.
+        /// fetches its result flags itself when it is completed.
         /// </typeparam>
         /// <param name="error">
         /// The result of the starting call: <see cref="WinsockError::Success"/>, <see cref="WinsockError::Pending"/> or a
         /// synchronous WSA error.
         /// </param>
         /// <param name="bytesTransferred">
-        /// The count the starting call wrote, or <c>nullptr</c>. A receive request (<see cref="AsyncSocketRecvIoRequest"/>)
-        /// fetches the count and the result flags itself (and stores the count here if given); any other
-        /// request is completed with *bytesTransferred, or without it with the count fetched from the operation.
+        /// The count the starting call wrote, or <c>nullptr</c>. The request is completed with *bytesTransferred,
+        /// or without it with the count fetched from the operation.
         /// </param>
         /// <param name="asyncIoRequest">The request the operation was started with; completed in place on synchronous success.</param>
         /// <returns>
@@ -1927,15 +1607,12 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         template <AsyncSocketIoRequestType _Request>
         WinsockErrorCode HandleCompletedRequest(WinsockErrorCode error, DWORD* bytesTransferred, _Request& asyncIoRequest) noexcept
         {
+            // Only a synchronous success is completed here. A pending operation must stay pending, so
+            // that the caller waits for its completion packet before the request (often on the stack)
+            // goes away.
             if (WinsockError::Succeeded(error)) {
                 DWORD transferred = 0;
-                if constexpr (std::derived_from<_Request, AsyncSocketRecvIoRequest>) {
-                    DWORD flags = asyncIoRequest.GetFlags();
-                    GetOverlappedResult(asyncIoRequest, &transferred, &flags);
-                    asyncIoRequest.SetFlags(flags);
-                    if (bytesTransferred)
-                        *bytesTransferred = transferred;
-                } else if (bytesTransferred) {
+                if (bytesTransferred) {
                     transferred = *bytesTransferred;
                 } else {
                     // the caller passed no count (as recommended for overlapped calls): take it from

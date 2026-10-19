@@ -244,7 +244,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         /// <param name="spinCount">
         /// The maximum number of spin attempts (<c>0</c>: <see cref="_CriticalSection::Enter"/> at once).
         /// </param>
-        explicit SpinCriticalSectionLock(_CriticalSectionType& criticalSection, unsigned long spinCount) noexcept :
+        explicit SpinCriticalSectionLock(_CriticalSectionType& criticalSection, std::uint32_t spinCount) noexcept :
             criticalSection_(criticalSection)
         {
             // spinCount stays non-zero exactly when TryEnter succeeded
@@ -271,4 +271,4 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     private:
         _CriticalSectionType& criticalSection_;
     };
-} // namespace ThinkMeta::ConcurrentTasks
+} // namespace ThinkMeta::ConcurrentTasks::Synchronization

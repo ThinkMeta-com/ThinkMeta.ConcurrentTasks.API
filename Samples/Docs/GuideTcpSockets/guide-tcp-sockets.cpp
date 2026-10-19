@@ -10,6 +10,7 @@
 #include <span>
 #include <vector>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
@@ -19,12 +20,13 @@ namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::AsyncTcpSocket4;
 using TC::Windows::WinsockError;
 using TC::Windows::WinsockErrorCode;
+// [/names]
 
 // [sizes]
 constexpr int MaxConnections = 16; // connection tasks the server keeps
 
-TC::Synchronization::TaskGroup_s
-    tasks; // all tasks of the program: server, connections, clients
+// all tasks of the program: server, connections, clients
+TC::Synchronization::TaskGroup_s tasks;
 // [/sizes]
 
 // [connection]
@@ -88,9 +90,9 @@ bool Echo(const sockaddr_in& server, std::span<const char> message,
     sockaddr_in     local{};
     local.sin_family      = AF_INET;
     local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    // ConnectEx needs a bound socket.
     if (WinsockError::Failed(socket.Create())
-        || WinsockError::Failed(
-            socket.Bind(local))) // ConnectEx needs a bound socket
+        || WinsockError::Failed(socket.Bind(local)))
         return false;
     if (WinsockError::Failed(socket.Connect(server, TC::Duration::Seconds(5))))
         return false;
@@ -114,9 +116,9 @@ bool Echo(const sockaddr_in& server, std::span<const char> message,
             break;
         received += n;
     }
+    // Giving up: the send must not stay pending.
     if (received < echo.size())
-        socket
-            .CancelAllAsyncRequests(); // giving up: the send must not stay pending
+        socket.CancelAllAsyncRequests();
     sendRequest.Wait(); // the request must not go away while the send is pending
 
     socket.Shutdown(SD_SEND); // the server's Recv returns 0 bytes now
@@ -129,6 +131,7 @@ bool Echo(const sockaddr_in& server, std::span<const char> message,
 constexpr int         Clients     = 8;
 constexpr std::size_t MessageSize = 256 * 1024;
 
+// [client-task]
 class Client : public TC::Tasks::Task
 {
 public:
@@ -145,13 +148,14 @@ public:
         ok = Echo(server, message, echo) && echo == message;
     }
 };
+// [/client-task]
 
 int main()
 {
     TC::ConvertThreadToTask();
     // [startup]
-    if (WinsockError::Failed(TC::Windows::Socket::Startup())) // WSAStartup and the
-                                                              // extension functions
+    // WSAStartup and the extension functions
+    if (WinsockError::Failed(TC::Windows::Socket::Startup()))
         return 1;
     if (!TC::AsyncIo::EnableAsyncIo() || !TC::EnableTimers())
         return 1;
@@ -164,10 +168,10 @@ int main()
         return 1;
     scheduler->Start();
 
+    // [listen]
     static Server server; // large: keep it off the stack
     static Client clients[Clients];
 
-    // [listen]
     sockaddr_in address{};
     address.sin_family      = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -182,7 +186,6 @@ int main()
     // [start]
     tasks.AddTask(&server);
     scheduler->AddTask(&server);
-    // [/start]
     for (int i = 0; i < Clients; ++i) {
         clients[i].server = address;
         clients[i].id     = i;
@@ -190,6 +193,7 @@ int main()
         scheduler->AddTask(&clients[i]);
     }
     tasks.Wait(); // server, connections and clients have exited
+    // [/start]
 
     int good = 0;
     for (const Client& client : clients)

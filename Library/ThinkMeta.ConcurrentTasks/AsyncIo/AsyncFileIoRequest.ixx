@@ -46,10 +46,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <returns>The file offset in bytes; <c>0</c> after <see cref="Reset"/>.</returns>
         /// <remarks>Stored in <c>OVERLAPPED</c> <c>Offset</c>/<c>OffsetHigh</c>.</remarks>
         /// <seealso cref="SetOffset"/>
-        unsigned long long GetOffset() const noexcept
+        [[nodiscard]] std::uint64_t GetOffset() const noexcept
         {
             auto& overlapped = GetOverlapped();
-            return (static_cast<unsigned long long>(overlapped.OffsetHigh) << 32) | overlapped.Offset;
+            return (static_cast<std::uint64_t>(overlapped.OffsetHigh) << 32) | overlapped.Offset;
         }
 
         /// <summary>Sets the file offset for the next operation.</summary>
@@ -62,12 +62,12 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// file pointer, every operation needs one.
         /// </remarks>
         /// <seealso cref="GetOffset"/>
-        void SetOffset(unsigned long long offset) noexcept
+        void SetOffset(std::uint64_t offset) noexcept
         {
             auto& overlapped = GetOverlapped();
 
-            overlapped.Offset     = static_cast<DWORD>(offset & 0xFFFFFFFFULL);
-            overlapped.OffsetHigh = static_cast<DWORD>((offset >> 32) & 0xFFFFFFFFULL);
+            overlapped.Offset     = static_cast<DWORD>(offset);
+            overlapped.OffsetHigh = static_cast<DWORD>(offset >> 32);
         }
 
         /// <summary>Stores the Win32 error code and the transferred bytes; signals nothing.</summary>
@@ -95,8 +95,12 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// <see cref="Wait"/> suspends the calling task (its thread runs other tasks meanwhile); a plain OS thread
     /// must first call <see cref="ConvertThreadToTask"/> (Core.h). The event is set on the completing thread
     /// (I/O thread, or the issuer for an immediate completion), as the last access of the
-    /// completion: once Wait returns, the request may be destroyed at once, which allows requests
-    /// in a task's stack frame. An operation that failed to be issued (an error other than
+    /// completion: with <see cref="WaitableAsyncFileIoRequest_s"/>, once Wait returns, the request may be
+    /// destroyed at once, which allows requests in a task's stack frame. With
+    /// <see cref="WaitableAsyncFileIoRequest"/> it may not: its event stores the signal and then takes
+    /// the waiters, so the request must stay until the completion has returned and no task waits on
+    /// it any more (see <see cref="Synchronization::ManualResetEvent"/>); a request that one task
+    /// waits for, as in a reader or writer loop, is a case for the _s variant. An operation that failed to be issued (an error other than
     /// <c>ERROR_IO_PENDING</c>) never completes on its own: do not wait for it, or complete it with
     /// <see cref="RequestCompleted"/> yourself. Never destroy the request while an operation is pending.
     /// </remarks>

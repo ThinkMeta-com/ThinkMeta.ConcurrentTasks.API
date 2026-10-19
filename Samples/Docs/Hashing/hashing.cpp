@@ -73,10 +73,10 @@ bool HashStream(TC::Memory::IReadSequentialMemory& stream, Sha256& result) noexc
     constexpr std::size_t BlockSize = 256 * 1024;
     Hasher                hasher;
     for (;;) {
-        std::size_t size
-            = BlockSize; // in: wanted; out: what the block has (less at the end)
-        const std::byte* data
-            = stream.RequestReadMemory(size); // suspends until there is enough data
+        // in: wanted; out: what the block has (less at the end)
+        std::size_t size = BlockSize;
+        // suspends until there is enough data
+        const std::byte* data = stream.RequestReadMemory(size);
         if (data == nullptr)
             break; // end of the stream
         hasher.Add(data, size);

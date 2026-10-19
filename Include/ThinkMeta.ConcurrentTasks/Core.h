@@ -20,6 +20,8 @@
 
 #include <Windows.h>
 
+#include <cstdint>
+
 // Marks the pure interfaces below: they are never instantiated themselves, so their constructors
 // need not set up a vtable of their own. Guarded because the library's Defs.h defines it too.
 #ifndef CT_NOVTABLE
@@ -43,7 +45,7 @@ namespace ThinkMeta::ConcurrentTasks {
     /// Passed in <see cref="SchedulerInfo::version"/>; the core accepts only its own version.
     /// </remarks>
     /// <seealso cref="CreateTaskScheduler"/>
-    inline constexpr unsigned long SchedulerVersion = 1;
+    inline constexpr std::uint32_t SchedulerVersion = 1;
 
     /// <summary>A span of time, counted in units of 100 nanoseconds.</summary>
     /// <remarks>
@@ -88,10 +90,10 @@ namespace ThinkMeta::ConcurrentTasks {
 
     /// <summary>Default task queue capacity.</summary>
     /// <remarks>Used when <see cref="SchedulerInfo::taskQueueCapacity"/> is <c>0</c>.</remarks>
-    inline constexpr unsigned long DefaultTaskQueueCapacity = 4096;
+    inline constexpr std::uint32_t DefaultTaskQueueCapacity = 4096;
 
     /// <summary>Largest task queue capacity <see cref="CreateTaskScheduler"/> accepts.</summary>
-    inline constexpr unsigned long MaximumTaskQueueCapacity = 1UL << 20;
+    inline constexpr std::uint32_t MaximumTaskQueueCapacity = std::uint32_t{1} << 20;
 
     /// <summary>The scheduler-owned bookkeeping of one task.</summary>
     /// <remarks>
@@ -236,9 +238,8 @@ namespace ThinkMeta::ConcurrentTasks {
         /// Called by the core's timer thread while the task is still suspended. Must be short and
         /// must not resume the task itself.
         /// </remarks>
-        virtual bool OnTimeout(SuspendedTask suspendedTask) noexcept
+        virtual bool OnTimeout([[maybe_unused]] SuspendedTask suspendedTask) noexcept
         {
-            (void)suspendedTask;
             return false;
         }
     };
@@ -457,7 +458,7 @@ namespace ThinkMeta::ConcurrentTasks {
     /// or the task functions. Only the <see cref="SchedulerKind::Default"/> scheduler calls it.
     /// </remarks>
     /// <seealso cref="SchedulerInfo::threadCallback"/>
-    using ThreadCallbackProc = void (*)(ITaskScheduler* taskScheduler, DWORD threadIndex, HANDLE thread, void* context, ThreadCallbackReason reason) noexcept;
+    using ThreadCallbackProc = void (*)(ITaskScheduler* taskScheduler, std::uint32_t threadIndex, HANDLE thread, void* context, ThreadCallbackReason reason) noexcept;
 
     /// <summary>Parameters of <see cref="CreateTaskScheduler"/>.</summary>
     /// <remarks>The core copies the struct.</remarks>
@@ -467,10 +468,10 @@ namespace ThinkMeta::ConcurrentTasks {
         /// Leave it at <see cref="SchedulerVersion"/>. <see cref="CreateTaskScheduler"/> rejects any
         /// other version.
         /// </remarks>
-        unsigned long version = SchedulerVersion;
+        std::uint32_t version = SchedulerVersion;
 
         /// <summary>Scheduler threads to run; <c>0</c> means one per logical processor.</summary>
-        DWORD numberOfThreads = 0;
+        std::uint32_t numberOfThreads = 0;
 
         /// <summary>Called on every scheduler thread when it starts and when it exits.</summary>
         /// <seealso cref="ThreadCallbackProc"/>
@@ -495,7 +496,7 @@ namespace ThinkMeta::ConcurrentTasks {
         /// <see cref="CreateTaskScheduler"/> fails. Each slot takes one cache line. Ignored by
         /// <see cref="SchedulerKind::TaskSwap"/>.
         /// </remarks>
-        unsigned long taskQueueCapacity = 0;
+        std::uint32_t taskQueueCapacity = 0;
     };
 
     extern "C" {
@@ -562,7 +563,7 @@ namespace ThinkMeta::ConcurrentTasks {
     /// <summary>Gives up the processor without suspending the calling task.</summary>
     /// <param name="yieldFlags">How to yield; see <see cref="YieldFlags"/>.</param>
     /// <seealso cref="YieldFlags"/>
-    CT_CORE void YieldTask(YieldFlags yieldFlags) noexcept;
+    CT_CORE void YieldTask(YieldFlags yieldFlags = YieldFlags::Default) noexcept;
 
     /// <summary>Sets the priority of the calling task.</summary>
     /// <param name="priority">
@@ -575,7 +576,9 @@ namespace ThinkMeta::ConcurrentTasks {
     /// <summary>Lets the calling OS thread act as a task.</summary>
     /// <remarks>
     /// The thread can then use the synchronization primitives.
-    /// <see cref="ConvertTaskToThread"/> reverses it.
+    /// <see cref="ConvertTaskToThread"/> reverses it. Once per thread: a second call before
+    /// ConvertTaskToThread is invalid use (the thread's task state would be nested, and the
+    /// first one lost).
     /// </remarks>
     CT_CORE void ConvertThreadToTask() noexcept;
 

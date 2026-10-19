@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Tasks.WaitableTask;
@@ -13,7 +14,8 @@ import ThinkMeta.ConcurrentTasks.Synchronization.ManualResetEvent;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
-using Clock  = std::chrono::steady_clock;
+// [/names]
+using Clock = std::chrono::steady_clock;
 
 // Test driver state: how often and when the document was saved.
 static int               saves = 0;
@@ -32,8 +34,7 @@ static long long Milliseconds(Clock::duration duration) noexcept
 
 // [wait-timeout]
 // Waits until the settings are loaded, but at most 200 ms.
-static bool
-    WaitForSettings(TC::Synchronization::ManualResetEvent_s& loaded) noexcept
+bool WaitForSettings(TC::Synchronization::ManualResetEvent_s& loaded) noexcept
 {
     if (loaded.Wait(TC::Duration::Milliseconds(200)))
         return true; // signaled in time
@@ -76,8 +77,8 @@ int main()
         return 1;
     scheduler->Start();
     bool ok = true;
-    TC::Synchronization::TaskGroup_s
-        helpers; // tracks the lambda tasks below; outlives them
+    // tracks the lambda tasks below; outlives them
+    TC::Synchronization::TaskGroup_s helpers;
 
     {
         // A loader task sets the event after 10 ms: the wait ends early and returns
@@ -136,8 +137,8 @@ int main()
         if (scheduler->AddTimedTask(&save, TC::TaskPriority::Normal,
                                     TC::Duration::Seconds(10))) {
             cancelled = TC::CancelTimedTask(&save); // same as save.CancelSchedule()
-            save.Wait(); // passes either way: a cancelled task exits without
-                         // running
+            // Passes either way: a cancelled task exits without running.
+            save.Wait();
         }
         // [/cancel]
         std::printf("cancelled:           %s\n",
