@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <thread>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Tasks.WaitableTask;
@@ -18,6 +19,7 @@ namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::Synchronization::AutoResetEvent_s;
 using TC::Synchronization::ManualResetEvent;
 using TC::Synchronization::ManualResetEvent_s;
+// [/names]
 
 // Test driver state: counts the tasks that got through the gate.
 static std::atomic<int> started{0};

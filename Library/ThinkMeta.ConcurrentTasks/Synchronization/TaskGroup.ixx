@@ -51,11 +51,13 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     protected:
         TaskGroupBase() noexcept = default;
 
-        // acquire pairs with the release decrements: a waiter that sees 0 without suspending sees
-        // the work of all tasks of the group
-        std::size_t GetTaskCount() noexcept { return taskCount_.load(std::memory_order_acquire); }
+        // A waiter that sees 0 sees the work of all tasks of the group. seq_cst on the decrement and
+        // the read: the last exit decrements and then reads the waiter list, a waiter publishes
+        // itself and then reads the count; with seq_cst at least one side sees the other (see
+        // SuspendableBase<Single>::SetSuspendedTask), and on x64 it costs nothing extra.
+        std::size_t GetTaskCount() noexcept { return taskCount_.load(std::memory_order_seq_cst); }
         std::size_t IncrementTaskCount() noexcept { return taskCount_.fetch_add(1, std::memory_order_relaxed) + 1; }
-        std::size_t DecrementTaskCount() noexcept { return taskCount_.fetch_sub(1, std::memory_order_release) - 1; }
+        std::size_t DecrementTaskCount() noexcept { return taskCount_.fetch_sub(1, std::memory_order_seq_cst) - 1; }
 
         // Calls that may still touch the group after a waiter could have passed: the exit
         // notifications and the waiter's own re-check after suspending. They enter before the count
@@ -93,7 +95,8 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// and <see cref="TaskGroup_s"/> (one waiter; also Wait with a timeout).
     /// Wait suspends and needs a task or an OS thread converted with
     /// <see cref="ConvertThreadToTask"/>. The group is reusable: after the count reached 0, new
-    /// tasks may be added for the next round.
+    /// tasks may be added for the next round, also by the task that just returned from Wait; a
+    /// Wait of the next round passes only once that round's count is 0 again.
     /// The group may be a local object of the function that waits for it: once Wait has returned
     /// (or TryWait returned <c>true</c>) and no other task waits on it, it may be destroyed; the
     /// destructor waits for an exit notification that is still finishing. Destroy it only after all
@@ -104,6 +107,13 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     class _TaskGroup : public TaskGroupBase, public Waitable<_SuspensionKind, _TaskGroup<_SuspensionKind>>
     {
     public:
+        /// <summary>A resumed waiter looks at the count again (see <see cref="Waitable"/>).</summary>
+        /// <remarks>
+        /// The re-check after a suspension resumes every waiter on the list, which may include a
+        /// waiter of the next round; that one finds the count above 0 and waits on.
+        /// </remarks>
+        static constexpr bool WaitRechecks = true;
+
         /// <summary>Creates an empty group.</summary>
         _TaskGroup() noexcept = default;
 

@@ -39,9 +39,9 @@ int main()
     constexpr std::size_t Parts  = 256;
 
     std::vector<std::uint32_t> values(Values);
+    // Spread over the whole range.
     for (std::size_t i = 0; i < Values; ++i)
-        values[i] = static_cast<std::uint32_t>(
-            i * 2654435761u); // spread over the whole range
+        values[i] = static_cast<std::uint32_t>(i * 2654435761u);
 
     TC::ConvertThreadToTask();
 
@@ -59,8 +59,8 @@ int main()
         // group and the task objects must outlive the tasks, including the last
         // exit notification.
         TC::Synchronization::TaskGroup group;
-        std::vector<SumTask>           tasks(
-            Parts); // not movable: the scheduler holds their addresses
+        // not movable: the scheduler holds their addresses
+        std::vector<SumTask> tasks(Parts);
 
         const std::size_t partSize = Values / Parts;
         for (std::size_t i = 0; i < Parts; ++i) {
@@ -108,8 +108,9 @@ int main()
         std::printf("Maximum from 2 tasks: %u (%s)\n", maximum,
                     maximum == expectedMax ? "ok" : "MISMATCH");
 
-        scheduler->Stop(); // the tasks and the group are destroyed after this, at
-                           // the end of the scope
+        // The tasks and the group are destroyed after this, at the end of the
+        // scope.
+        scheduler->Stop();
     }
 
     scheduler->Destroy();

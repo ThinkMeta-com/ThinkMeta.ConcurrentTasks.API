@@ -575,7 +575,9 @@ namespace ThinkMeta::ConcurrentTasks {
     /// <summary>Lets the calling OS thread act as a task.</summary>
     /// <remarks>
     /// The thread can then use the synchronization primitives.
-    /// <see cref="ConvertTaskToThread"/> reverses it.
+    /// <see cref="ConvertTaskToThread"/> reverses it. Once per thread: a second call before
+    /// ConvertTaskToThread is invalid use (the thread's task state would be nested, and the
+    /// first one lost).
     /// </remarks>
     CT_CORE void ConvertThreadToTask() noexcept;
 

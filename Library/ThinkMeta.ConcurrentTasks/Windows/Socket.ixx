@@ -210,12 +210,17 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         WinsockErrorCode Close() noexcept
         {
             if (IsValid()) {
-                int error = closesocket(socket_);
-                socket_   = InvalidSocket;
+                // The socket is given up only when closesocket took it: with SO_LINGER and a
+                // non-blocking socket it answers WSAEWOULDBLOCK and the socket stays open, so the
+                // caller keeps the handle and may close it again (or wait and retry).
+                if (closesocket(socket_) == 0) {
+                    socket_ = InvalidSocket;
+                    return WinsockError::Success;
+                }
 
-                CT_ASSERT(!error);
-
-                return WinsockError::GetError(error);
+                const auto error = WinsockError::GetLastError();
+                CT_ASSERT(error == WSAEWOULDBLOCK);
+                return error;
             }
 
             return WinsockError::Success;
@@ -1056,7 +1061,7 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <c>TRUE</c> blocks the calling thread until the operation has completed; <c>FALSE</c> returns
         /// <c>WSA_IO_INCOMPLETE</c> while pending.
         /// </param>
-        /// <param name="flags">Receives the operation's result flags.</param>
+        /// <param name="flags">Receives the operation's result flags; <c>nullptr</c> if they are not wanted.</param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::Incomplete"/> (still pending,
         /// <paramref name="wait"/> <c>FALSE</c>) or the operation's error.
@@ -1065,7 +1070,9 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         {
             CT_ASSERT(IsValid());
             CT_ASSERT(bytesTransferred);
-            return WinsockError::GetAsyncError(WSAGetOverlappedResult(socket_, &overlapped, bytesTransferred, wait, flags));
+            // WSAGetOverlappedResult faults on a null flags pointer
+            DWORD unusedFlags;
+            return WinsockError::GetAsyncError(WSAGetOverlappedResult(socket_, &overlapped, bytesTransferred, wait, flags ? flags : &unusedFlags));
         }
 
         /// <summary>Starts an overlapped <c>WSAIoctl</c> (raw <c>OVERLAPPED</c> form).</summary>

@@ -345,10 +345,13 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             Submit();
             Retire();
             const std::uint64_t done = DonePrefix();
-            if (done / settings_.segmentSize > published_ / settings_.segmentSize)
-                writerWake_.Set();
-            published_ = done;
+            const bool          wake = done / settings_.segmentSize > published_ / settings_.segmentSize;
+            published_               = done;
+            // published before the writer is woken: woken first, it could read the old position,
+            // find nothing to do and sleep until the next segment boundary or Close
             doneTo_.store(done, std::memory_order_release);
+            if (wake)
+                writerWake_.Set();
         }
 
         /// <summary>Lowest source address the unfinished copies still read (<c>nullptr</c>: none).</summary>
@@ -776,7 +779,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         std::uint64_t                   issuedTo_     = 0;
         std::uint64_t                   issued_       = 0;
         std::uint64_t                   completed_    = 0;
-        WaitableAsyncFileIoRequest      requests_[MaxWritesInFlight];
+        // _s: the writer task is the only waiter and reuses a request right after its Wait, which
+        // the single-waiter event allows (the completion's Set is its last access to the request)
+        WaitableAsyncFileIoRequest_s    requests_[MaxWritesInFlight];
         Range                           ranges_[MaxWritesInFlight] = {};
 
         // statistics

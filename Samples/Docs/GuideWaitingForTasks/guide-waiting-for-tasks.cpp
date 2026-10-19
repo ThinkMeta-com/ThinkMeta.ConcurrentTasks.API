@@ -7,12 +7,14 @@
 #include <cstdint>
 #include <cstdio>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Tasks.WaitableTask;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
+// [/names]
 
 // Test driver state: what the workers below have processed.
 static std::atomic<int> processed{0};
@@ -125,8 +127,8 @@ int main()
     {
         // [wait-one]
         SumTask task(0, 1'000'000);
-        scheduler->AddTask(
-            &task);  // from a converted thread: AddTask on the scheduler object
+        // from a converted thread: AddTask on the scheduler object
+        scheduler->AddTask(&task);
         task.Wait(); // suspends main until Run has returned
         // [/wait-one]
         std::printf("one task:      %llu\n", task.Sum());

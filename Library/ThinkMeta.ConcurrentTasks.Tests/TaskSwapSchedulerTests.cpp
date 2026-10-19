@@ -151,6 +151,54 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
             Assert::IsTrue(finished, L"Both tasks should complete without timing out");
         }
+
+        // A task that only yields must hand the processor to the other task when the policy says
+        // switch - from either slot. The first task added (slot 0) yields until the second has run;
+        // with a scan that always started at slot 0, the yielding task was picked again every time
+        // and the second one never ran.
+        TEST_METHOD(TestYieldSwitchesToTheOtherTaskFromEitherSlot)
+        {
+            for (int yieldingSlot = 0; yieldingSlot < 2; ++yieldingSlot) {
+                ConvertThreadToTask();
+
+                AlwaysSwitchPolicy policy;
+                ScopedScheduler    scheduler(SchedulerInfo{.taskSwitchPolicy = &policy}, SchedulerKind::TaskSwap);
+
+                constexpr int     MaxYields = 1000;
+                std::atomic<bool> otherRan{false};
+                std::atomic<int>  yields{0};
+                std::atomic<bool> yielderDone{false};
+
+                auto yielder = Tasks::Task::Create([&]() {
+                    while (!otherRan.load(std::memory_order_acquire) && yields.load(std::memory_order_relaxed) < MaxYields) {
+                        yields.fetch_add(1, std::memory_order_relaxed);
+                        YieldTask(YieldFlags::Default);
+                    }
+                    yielderDone.store(true, std::memory_order_release);
+                });
+                auto other = Tasks::Task::Create([&]() { otherRan.store(true, std::memory_order_release); });
+
+                // both in their slots before the scheduler runs, so the yielder does not race
+                // against the second AddTask
+                if (yieldingSlot == 0) {
+                    scheduler.AddTask(&yielder, TaskPriority::Normal);
+                    scheduler.AddTask(&other, TaskPriority::Normal);
+                } else {
+                    scheduler.AddTask(&other, TaskPriority::Normal);
+                    scheduler.AddTask(&yielder, TaskPriority::Normal);
+                }
+                scheduler.Start();
+
+                const bool finished = WaitFor([&]() { return yielderDone.load(std::memory_order_acquire); }, std::chrono::seconds(10));
+
+                scheduler.Stop();
+                ConvertTaskToThread();
+
+                Assert::IsTrue(finished, L"the yielding task did not finish");
+                Assert::IsTrue(otherRan.load(), std::format(L"slot {}: the other task never ran while the first one yielded", yieldingSlot).c_str());
+                Assert::IsTrue(yields.load() < MaxYields, std::format(L"slot {}: the yielding task kept the processor for {} yields", yieldingSlot, yields.load()).c_str());
+            }
+        }
     };
 
 } // namespace ThinkMeta::ConcurrentTasks::Tests

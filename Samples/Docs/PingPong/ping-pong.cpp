@@ -70,9 +70,9 @@ private:
 
 int main()
 {
+    // [run]
     TC::ConvertThreadToTask();
 
-    // [run]
     // Two threads, so that a Release can wake the other task on the other thread.
     // With one thread both tasks share it and every round trip is two plain task
     // switches.
@@ -93,8 +93,8 @@ int main()
         PongTask    pongTask(ping, pong);
 
         TC::Synchronization::TaskGroup_s group; // main is its only waiter
-        group.AddTask(
-            &pingTask); // before AddTask: the group must count the task in first
+        // before AddTask: the group must count the task in first
+        group.AddTask(&pingTask);
         group.AddTask(&pongTask);
 
         const auto start = std::chrono::steady_clock::now();

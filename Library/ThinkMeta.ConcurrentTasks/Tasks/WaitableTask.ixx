@@ -35,6 +35,12 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
     /// allows at most one task waiting at a time, is cheaper and accepts a timeout. The waiting side
     /// must be a task or a thread converted with <see cref="ConvertThreadToTask"/>. After the first
     /// exit every Wait returns at once: an object is meant to run once.
+    /// Lifetime: with <see cref="WaitableTask_s"/> the waiting task may destroy the object as soon as
+    /// its Wait returned, since the exit's Set is one operation. With <see cref="WaitableTask"/> it
+    /// may not: the exit stores the signal and then takes the list of waiters, and a waiter that
+    /// finds the signal passes in between (see <see cref="Synchronization::ManualResetEvent"/>);
+    /// destroy it only when no task waits on it any more and the exit has returned - or wait for
+    /// the task through a <see cref="Synchronization::TaskGroup"/>, which covers this case.
     /// </remarks>
     /// <seealso cref="Synchronization::TaskGroup"/>
     template <SuspensionKind _SuspensionKind>
@@ -73,10 +79,10 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
         /// </remarks>
         void OnTaskExited() noexcept override
         {
-            // A task waiting on this object may destroy it as soon as the event is set, and a task
-            // waiting on the group may destroy it as soon as the group is told. So the callback is
-            // read first, the event is set next, and the group is told last, without touching this
-            // object again.
+            // A task waiting on this object may destroy it as soon as the event is set (the Single
+            // variant; the Multiple one must stay until Set has returned), and a task waiting on
+            // the group may destroy it as soon as the group is told. So the callback is read first,
+            // the event is set next, and the group is told last, without touching this object again.
             auto* notifyTaskStateChange = GetNotifyCallback();
             event_.Set();
             if (notifyTaskStateChange)

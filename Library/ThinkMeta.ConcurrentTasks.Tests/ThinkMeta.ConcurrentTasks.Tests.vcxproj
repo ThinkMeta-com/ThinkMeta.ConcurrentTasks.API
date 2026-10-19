@@ -49,6 +49,8 @@
     <ClCompile Include="AsyncSocketTests.cpp" />
     <ClCompile Include="SchedulerStarvationTests.cpp" />
     <ClCompile Include="TaskSwapSchedulerTests.cpp" />
+    <ClCompile Include="SpscVirtualMemoryPipeTests.cpp" />
+    <ClCompile Include="CrashDump.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />

@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
@@ -22,6 +23,7 @@ namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::Memory::IReadSequentialMemory;
 using TC::Memory::IWriteSequentialMemory;
 using TC::Windows::Error;
+// [/names]
 
 // [sample]
 // One measurement; the stream is a sequence of them.
@@ -42,14 +44,13 @@ static Sample TakeSample(std::size_t index) noexcept
 // memory.
 void WriteSamples(IWriteSequentialMemory& out, std::size_t count) noexcept
 {
-    out.Initialize(
-        count
-        * sizeof(Sample)); // announce the size first (also for an empty stream)
+    // announce the size first (also for an empty stream)
+    out.Initialize(count * sizeof(Sample));
     constexpr std::size_t PerBlock = 4096; // samples per block
     for (std::size_t first = 0; first < count; first += PerBlock) {
-        const std::size_t n    = std::min(PerBlock, count - first);
-        std::byte*        data = out.RequestWriteMemory(
-            n * sizeof(Sample)); // the next bytes of the stream
+        const std::size_t n = std::min(PerBlock, count - first);
+        // the next bytes of the stream
+        std::byte* data = out.RequestWriteMemory(n * sizeof(Sample));
         if (data == nullptr)
             break;
         for (std::size_t i = 0; i < n; ++i) {
@@ -67,10 +68,10 @@ void WriteSamples(IWriteSequentialMemory& out, std::size_t count) noexcept
 // false if the stream ended early.
 bool SumSamples(IReadSequentialMemory& in, double& sum) noexcept
 {
-    const std::size_t total
-        = in.GetSize(); // waits until the producer has called Initialize
-    std::size_t read = 0;
-    sum              = 0;
+    // waits until the producer has called Initialize
+    const std::size_t total = in.GetSize();
+    std::size_t       read  = 0;
+    sum                     = 0;
     for (;;) {
         std::size_t size = 4096 * sizeof(Sample); // wanted; less only at the end
         const std::byte* data = in.RequestReadMemory(size);

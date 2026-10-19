@@ -35,10 +35,13 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// <see cref="ConvertThreadToTask"/>. Set, <see cref="Reset"/> and <see cref="TryWait"/> never
     /// suspend and may be called from any thread (the core's I/O thread calls Set). No member
     /// reports errors.
-    /// ManualResetEvent: any number of waiters, no timeouts. Destroy the event only when no task
-    /// can wait on it or set it any more and the last Set has returned; the return of a Wait alone
-    /// does not mean that, since Set may still be resuming other waiters (ManualResetEvent_s allows
-    /// destroying it right after the wait).
+    /// ManualResetEvent: any number of waiters, no timeouts. A waiter passes once it finds the event
+    /// set after a resume; a Set taken back by a Reset before the waiter looked is not a pass, the
+    /// waiter waits on. Destroy the event only when no task can wait on it or set it any more and
+    /// the last Set has returned; the return of a Wait alone does not mean that: the Set that let
+    /// the waiter pass may still be taking the list of waiters, and the waiter's own suspend
+    /// callback may still be re-checking the event. A waiter that wants to destroy the event right
+    /// after its wait uses ManualResetEvent_s, whose Set is one operation.
     /// </remarks>
     /// <seealso cref="AutoResetEvent"/>
     /// <seealso cref="SuspensionKind"/>
@@ -46,12 +49,22 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     class _ManualResetEvent : public Waitable<_SuspensionKind, _ManualResetEvent<_SuspensionKind>>
     {
     public:
+        /// <summary>A resumed waiter looks at the event again (see <see cref="Waitable"/>).</summary>
+        /// <remarks>
+        /// A resume alone does not let a waiter pass: the re-check after a suspension resumes every
+        /// waiter on the list, among them tasks that started waiting after a Reset.
+        /// </remarks>
+        static constexpr bool WaitRechecks = true;
+
         /// <summary>Creates the event.</summary>
         /// <param name="isSet"><c>true</c> to create it set.</param>
         explicit _ManualResetEvent(bool isSet = false) noexcept : signal_(isSet ? 1 : 0) {}
 
         /// <summary>Sets the event and resumes every task suspended on it.</summary>
-        /// <remarks>Never suspends; any thread.</remarks>
+        /// <remarks>
+        /// Never suspends; any thread. Takes the waiters in one step, after the signal is stored:
+        /// the event must stay alive until Set has returned (see the class remarks).
+        /// </remarks>
         /// <seealso cref="Reset"/>
         /// <seealso cref="Wait"/>
         void Set() noexcept
@@ -59,6 +72,8 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
             // seq_cst: the store must be visible before Resume() reads the list of waiters. A waiter adds
             // itself to that list and then reads the signal; with a release store both reads can miss
             // (store buffering), and the waiter stays suspended although the event is set.
+            // A waiter that finds the signal set passes before the list is taken: the event must
+            // still be alive then (see the class remarks).
             signal_.store(1, std::memory_order_seq_cst);
             this->Resume();
         }

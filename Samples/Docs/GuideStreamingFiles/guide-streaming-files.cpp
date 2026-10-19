@@ -11,6 +11,7 @@
 #include <span>
 #include <vector>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
@@ -21,6 +22,7 @@ import ThinkMeta.ConcurrentTasks.Windows.Error;
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::OrderedFileWriter;
 using TC::AsyncIo::StreamedFileReader;
+// [/names]
 
 // [layout]
 // The file: a header, then one record per item, its 8-byte id followed by its
@@ -69,17 +71,17 @@ bool WriteItems(OrderedFileWriter& writer, std::span<const Item> items) noexcept
         if (item.payload == nullptr)
             continue;                            // nothing to export
         writer.Write(&item.id, sizeof(item.id)); // copied at once
-        writer.WriteDeferred(item.payload,
-                             PayloadSize); // copied later by a copy task
+        // copied later by a copy task
+        writer.WriteDeferred(item.payload, PayloadSize);
+        // Every 16 records: hand the copies to the copy tasks, publish progress.
         if (++count % 16 == 0)
-            writer
-                .EndBatch(); // hand the copies to the copy tasks, publish progress
+            writer.EndBatch();
     }
 
     header = {Magic, count};
-    writer.WriteAt(0, &header,
-                   sizeof(header)); // in memory, or a patch if already written
-    return writer.Close();          // finishes copies and writes, applies the patch
+    // in memory, or a patch if already written
+    writer.WriteAt(0, &header, sizeof(header));
+    return writer.Close(); // finishes copies and writes, applies the patch
 }
 // [/writer-produce]
 
@@ -145,8 +147,8 @@ int main()
     }
     exported = items;
 
-    TC::Synchronization::TaskGroup_s
-        tasks; // the writer's tasks, later the reader's tasks
+    // the writer's tasks, later the reader's tasks
+    TC::Synchronization::TaskGroup_s tasks;
 
     // [writer-setup]
     OrderedFileWriter                      writer;
@@ -155,8 +157,8 @@ int main()
     TC::AsyncIo::OrderedFileWriterSettings settings;
     settings.segmentSize = 1 << 20; // write and decommit in 1 MB steps
 
-    const std::uint64_t bound = sizeof(Header)
-        + items.size() * RecordSize; // the largest size the file may reach
+    // the largest size the file may reach
+    const std::uint64_t bound = sizeof(Header) + items.size() * RecordSize;
     if (TC::Windows::Error::Failed(writer.Open(path, bound, settings)))
         return 1;
 
@@ -168,8 +170,8 @@ int main()
     // [/writer-setup]
 
     // [writer-close]
-    const bool closed = WriteItems(
-        writer, items);      // main is the producer (a converted thread may be one)
+    // main is the producer (a converted thread may be one)
+    const bool closed = WriteItems(writer, items);
     writer.StopCopyTasks(2); // two copy tasks were scheduled
     tasks.Wait();            // writer task and copy tasks have exited
     // [/writer-close]
@@ -185,8 +187,8 @@ int main()
     StreamedFileReader                      reader;
     TC::AsyncIo::StreamedFileReaderSettings readSettings;
     readSettings.segmentSize = 1 << 20; // read, commit and decommit in 1 MB steps
-    readSettings.readAhead   = 4
-        << 20; // read at most 4 MB past the oldest byte in use
+    // read at most 4 MB past the oldest byte in use
+    readSettings.readAhead     = 4 << 20;
     readSettings.readsInFlight = 4;
 
     if (TC::Windows::Error::Failed(reader.Open(path, readSettings, 2))) // two users
@@ -202,9 +204,8 @@ int main()
     auto   walkRecords = TC::Tasks::Task::Create([&reader, &header]() noexcept {
         if (header.magic == Magic)
             ReadRecords(reader, header.count);
-        else
-            reader.Release(
-                0, ~std::uint64_t{0}); // not our file: release it all the same
+        else // not our file: release it all the same
+            reader.Release(0, ~std::uint64_t{0});
     });
     auto   readHeader
         = TC::Tasks::Task::Create([&reader, &header, &walkRecords]() noexcept {

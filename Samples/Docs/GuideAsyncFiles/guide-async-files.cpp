@@ -10,6 +10,7 @@
 #include <cstring>
 #include <vector>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Tasks.WaitableTask;
@@ -21,6 +22,7 @@ import ThinkMeta.ConcurrentTasks.Windows.Error;
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::AsyncFile;
 using TC::Windows::Error;
+// [/names]
 
 constexpr DWORD BlockSize = 64 * 1024;
 
@@ -91,8 +93,8 @@ static bool IsEndOfFile(AsyncFile& file, std::uint64_t offset) noexcept
 {
     std::byte buffer[512];
     DWORD     read = 0;
-    return file.Read(buffer, sizeof(buffer), read, offset)
-        == Error::EndOfFile; // ERROR_HANDLE_EOF
+    // ERROR_HANDLE_EOF
+    return file.Read(buffer, sizeof(buffer), read, offset) == Error::EndOfFile;
 }
 // [/errors]
 
@@ -102,9 +104,9 @@ static std::uint64_t Consume(TC::Memory::SpscVirtualMemoryPipe& pipe) noexcept
 {
     std::uint64_t total = 0;
     for (;;) {
-        std::size_t      size = 128 * 1024;
-        const std::byte* data
-            = pipe.RequestReadMemory(size); // suspends until data or the end
+        std::size_t size = 128 * 1024;
+        // suspends until data or the end
+        const std::byte* data = pipe.RequestReadMemory(size);
         if (data == nullptr)
             return total;
         total += size; // ... process data[0 .. size) here ...

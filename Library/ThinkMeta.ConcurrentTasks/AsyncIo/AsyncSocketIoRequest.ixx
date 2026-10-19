@@ -58,9 +58,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         void RequestCompleted(DWORD error, DWORD bytesTransferred) noexcept override
         {
             SetTransferredBytes(bytesTransferred);
-            // WSAGetLastError forwards to GetLastError, so the packet's error code is the
-            // Winsock error code as well.
-            SetError(error);
+            // A failed packet carries the Win32 form of the operation's NTSTATUS (ERROR_NETNAME_DELETED
+            // for a reset), not the WSAE* code a synchronous failure reports; the status in the
+            // OVERLAPPED gives the Winsock code back (see WinsockError::FromOverlapped).
+            SetError(Windows::WinsockError::FromOverlapped(GetOverlapped(), static_cast<Windows::WinsockErrorCode>(error)));
         }
 
     protected:

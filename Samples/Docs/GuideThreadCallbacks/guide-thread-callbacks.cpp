@@ -9,21 +9,23 @@
 #include <cstdio>
 #include <cwchar>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
+// [/names]
 
 // [context]
 // What the callback needs from the application. Passed as threadCallbackContext; it
 // must outlive the scheduler's threads.
 struct ThreadSetup {
-    const wchar_t*             name; // prefix of the thread names
-    std::atomic<unsigned>      started{0};
-    std::atomic<unsigned>      exited{0};
-    std::atomic<unsigned long> itemsDone{
-        0}; // collected from the threads on Exiting
+    const wchar_t*        name; // prefix of the thread names
+    std::atomic<unsigned> started{0};
+    std::atomic<unsigned> exited{0};
+    // Collected from the threads on Exiting.
+    std::atomic<unsigned long> itemsDone{0};
 };
 // [/context]
 
@@ -83,7 +85,9 @@ static void JoinMmcss(TC::ITaskScheduler*, DWORD, HANDLE thread, void*,
 }
 // [/mmcss]
 
-// A task that processes some items; it counts them in the per-thread state.
+// [worker]
+// A task that processes some items and counts them in the per-thread state: between
+// two waits it stays on one thread.
 class Worker : public TC::Tasks::Task
 {
 public:
@@ -93,6 +97,7 @@ public:
             ++t_itemsDone; // ... process an item ...
     }
 };
+// [/worker]
 
 int main()
 {
@@ -122,8 +127,8 @@ int main()
         group.Wait();
 
         // [stop]
-        scheduler
-            ->Stop(); // every thread has run its Exiting callback when Stop returns
+        // every thread has run its Exiting callback when Stop returns
+        scheduler->Stop();
         scheduler->Destroy();
         std::printf("threads: %u started, %u exited; items: %lu\n",
                     setup.started.load(), setup.exited.load(),
@@ -134,12 +139,14 @@ int main()
     }
 
     {
+        // [audio]
         // One thread for real-time work.
         TC::SchedulerInfo info{};
         info.numberOfThreads = 1;
         info.threadCallback  = JoinMmcss;
         TC::ITaskScheduler* audio
             = TC::CreateTaskScheduler(TC::SchedulerKind::Default, &info);
+        // [/audio]
         if (audio == nullptr)
             return 1;
         audio->Start();

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 
+// [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Synchronization.Semaphore;
@@ -19,6 +20,7 @@ import ThinkMeta.ConcurrentTasks.Cpp.Padded;
 namespace TC = ThinkMeta::ConcurrentTasks;
 using namespace TC::Collections;
 using TC::Synchronization::Semaphore;
+// [/names]
 
 // [node]
 // A job that can sit on a ConcurrentStack: derived from SLIST_ENTRY and aligned to
@@ -82,8 +84,8 @@ TC::Cpp::Padded<ConsumerStats> stats[Consumers];
 void Submit(Buffer& buffer, ConcurrentStack<Job>& pool, int orderId,
             int amount) noexcept
 {
-    Job* job
-        = pool.Pop(); // never empty: enough nodes for every place a node can be
+    // never empty: enough nodes for every place a node can be
+    Job* job     = pool.Pop();
     job->orderId = orderId;
     job->amount  = amount;
     buffer.Put(job);
@@ -100,8 +102,8 @@ void HandleNext(Buffer& buffer, ConcurrentStack<Job>& pool,
 }
 // [/workers]
 
-constexpr int PerTask
-    = 10'000; // jobs each producer submits and each consumer handles
+// Jobs each producer submits and each consumer handles.
+constexpr int PerTask = 10'000;
 
 int main()
 {
@@ -120,8 +122,8 @@ int main()
     // [free-list]
     // A free list of nodes shared by all tasks: Push and Pop are lock-free and
     // never allocate.
-    static Job nodes[Capacity + Producers
-                     + Consumers]; // queue full, one per producer and consumer
+    // queue full, one per producer and consumer
+    static Job           nodes[Capacity + Producers + Consumers];
     ConcurrentStack<Job> pool;
     for (Job& node : nodes)
         pool.Push(&node);
@@ -159,8 +161,9 @@ int main()
         jobs += consumerStats.jobs;
         amount += consumerStats.amount;
     }
+    // 1 + ... + 10 per ten jobs
     const std::uint64_t expectedAmount
-        = std::uint64_t{Producers} * PerTask / 10 * 55; // 1 + ... + 10 per ten jobs
+        = std::uint64_t{Producers} * PerTask / 10 * 55;
     const bool jobsOk
         = jobs == std::uint64_t{Producers} * PerTask && amount == expectedAmount;
     std::printf("jobs:       %llu handled, amounts %s\n", jobs,

@@ -74,8 +74,12 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <seealso cref="Close"/>
         static ErrorCode Open(DWORD desiredAccess, BOOL inheritHandle, DWORD threadId, Thread& thread) noexcept
         {
-            thread = Thread(::OpenThread(desiredAccess, inheritHandle, threadId));
-            return thread.IsValid() ? Error::Success : Error::GetLastError();
+            // the error is read before the assignment closes the handle thread held so far, which
+            // would overwrite it
+            Thread          opened(::OpenThread(desiredAccess, inheritHandle, threadId));
+            const ErrorCode error = opened.IsValid() ? Error::Success : Error::GetLastError();
+            thread                = std::move(opened);
+            return error;
         }
 
         /// <summary>Creates a thread in this process (<c>CreateThread</c>) and keeps its handle.</summary>

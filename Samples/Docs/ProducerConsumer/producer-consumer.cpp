@@ -33,8 +33,8 @@ struct WorkItem {
 // work. There are never more than PoolSize items, so a queue with PoolSize slots
 // can never overflow - by construction, not by luck. Each queue has a semaphore
 // that counts its items.
-constexpr std::size_t PoolSize
-    = 256; // a power of two: it is also the queue capacity
+// a power of two: it is also the queue capacity
+constexpr std::size_t PoolSize = 256;
 
 class Channel
 {
@@ -77,8 +77,8 @@ private:
     std::vector<WorkItem>         pool_ = std::vector<WorkItem>(PoolSize);
     BoundedPointerQueue<WorkItem> free_;
     BoundedPointerQueue<WorkItem> work_;
-    Semaphore freeCount_; // several tasks wait on each semaphore: the multi-waiter
-                          // variant
+    // Several tasks wait on each semaphore: the multi-waiter variant.
+    Semaphore freeCount_;
     Semaphore workCount_;
 };
 // [/channel]
@@ -144,8 +144,8 @@ int main()
         Channel  channel;
         Producer producers[Producers];
         Consumer consumers[Consumers];
-        TC::Synchronization::TaskGroup_s
-            producerGroup; // main is the only waiter of each group
+        // main is the only waiter of each group
+        TC::Synchronization::TaskGroup_s producerGroup;
         TC::Synchronization::TaskGroup_s consumerGroup;
         // [/objects]
 

@@ -61,15 +61,15 @@ bool Produce(OrderedFileWriter&            writer,
         writer.Write(&record, sizeof(record));
         // Borrowed, not copied: source must stay unchanged until the copy has run.
         writer.WriteDeferred(source.data() + PayloadOffset(i), record.size);
+        // Hands the copies to the copy tasks, shows the writer the finished front.
         if ((i + 1) % RecordsPerBatch == 0)
-            writer.EndBatch(); // hands the copies to the copy tasks, shows the
-                               // writer the finished front
+            writer.EndBatch();
     }
 
     const std::uint64_t records = Records;
     writer.WriteAt(offsetof(FileHeader, records), &records, sizeof(records));
-    return writer.Close(); // finishes the copies, waits for the writer task to
-                           // write everything
+    // Finishes the copies, waits for the writer task to write everything.
+    return writer.Close();
 }
 // [/produce]
 

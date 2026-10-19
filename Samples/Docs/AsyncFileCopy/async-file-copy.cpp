@@ -23,9 +23,9 @@ using TC::AsyncIo::WaitableAsyncFileIoRequest_s;
 using TC::Windows::Error;
 using TC::Windows::ErrorCode;
 
-constexpr std::uint64_t FileSize
-    = 8 * 1024 * 1024 + 123; // not a multiple of the block size
-constexpr DWORD BlockSize = 1024 * 1024;
+// not a multiple of the block size
+constexpr std::uint64_t FileSize  = 8 * 1024 * 1024 + 123;
+constexpr DWORD         BlockSize = 1024 * 1024;
 
 std::byte Pattern(std::uint64_t offset) noexcept
 {
@@ -189,8 +189,8 @@ int main()
     const std::filesystem::path target = std::filesystem::temp_directory_path()
         / L"ConcurrentTasks-copy-target.bin";
 
-    TC::ConvertThreadToTask();
     // [run]
+    TC::ConvertThreadToTask();
     // Before the first AsyncFile is created: it associates its handle with the
     // core's completion port.
     if (!TC::AsyncIo::EnableAsyncIo())
@@ -209,10 +209,10 @@ int main()
     scheduler->Stop();
     scheduler->Destroy();
 
-    TC::AsyncIo::DisableAsyncIo(); // no operation is pending any more: every file
-                                   // is closed
-    // [/run]
+    // No operation is pending any more: every file is closed.
+    TC::AsyncIo::DisableAsyncIo();
     TC::ConvertTaskToThread();
+    // [/run]
 
     std::printf("Copied %llu bytes: %s, %s\n", FileSize,
                 task.error == Error::Success ? "no error" : "FAILED",

@@ -128,7 +128,13 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                                            reinterpret_cast<sockaddr**>(&localAddress), &localAddressLength,
                                            reinterpret_cast<sockaddr**>(&remoteAddress), &remoteAddressLength);
 
-                CopyMemory(address, remoteAddress, sizeof(*address));
+                // only what AcceptEx stored: a shorter address (family mismatch on a dual-stack
+                // listener) must not pull bytes from behind it
+                const auto length = remoteAddressLength > 0 && static_cast<std::size_t>(remoteAddressLength) < sizeof(*address)
+                                        ? static_cast<std::size_t>(remoteAddressLength)
+                                        : sizeof(*address);
+                ZeroMemory(address, sizeof(*address));
+                CopyMemory(address, remoteAddress, length);
             }
 
             return error;

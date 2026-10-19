@@ -304,6 +304,9 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
             return *this;
         }
 
+        // the overload below would otherwise hide the base's ip_mreq form
+        using _IpSocketBase::SetOptionAddMembership;
+
         /// <summary>Joins an IPv4 multicast group on an interface.</summary>
         /// <param name="multicastAddress">The IPv4 multicast group address.</param>
         /// <param name="index">The interface index (below 256, see remarks).</param>
@@ -480,6 +483,9 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
             _IpSocketBase::operator=(std::move(other));
             return *this;
         }
+
+        // the overload below would otherwise hide the base's ipv6_mreq form
+        using _IpSocketBase::SetOptionAddMembership;
 
         /// <summary>Joins an IPv6 multicast group on an interface.</summary>
         /// <param name="multicastAddress">The IPv6 multicast group address.</param>

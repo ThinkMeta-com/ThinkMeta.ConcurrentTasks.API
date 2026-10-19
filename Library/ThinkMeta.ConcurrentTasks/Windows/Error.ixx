@@ -46,8 +46,17 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         static constexpr Type NotFound          = ERROR_NOT_FOUND;
         static constexpr Type OperationAborted  = ERROR_OPERATION_ABORTED;
 
-        /// <summary><c>ERROR_TIMEOUT</c>: a wait or operation with a timeout ran out of time.</summary>
+        /// <summary><c>ERROR_TIMEOUT</c>: an operation with a timeout ran out of time.</summary>
+        /// <remarks>
+        /// Reported by the library's own timed operations (<see cref="AsyncIo::AsyncFile::Read"/>, say).
+        /// The Win32 wait functions behind <see cref="Thread::Wait"/> and
+        /// <see cref="IoCompletionPort::GetQueuedCompletionStatus"/> report their timeout as
+        /// <see cref="WaitTimedOut"/> (<c>WAIT_TIMEOUT</c>, 258) instead.
+        /// </remarks>
         static constexpr Type TimedOut = ERROR_TIMEOUT;
+
+        /// <summary><c>WAIT_TIMEOUT</c>: a Win32 wait ran out of time (see <see cref="TimedOut"/>).</summary>
+        static constexpr Type WaitTimedOut = WAIT_TIMEOUT;
 
         /// <summary>Returns the calling thread's last Win32 error (<c>::GetLastError</c>).</summary>
         /// <returns>The thread's last Win32 error code; <see cref="Success"/> if none was set.</returns>
