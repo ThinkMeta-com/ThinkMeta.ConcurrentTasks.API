@@ -39,7 +39,9 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// That re-check resumes every task suspended at that moment, so with
     /// <see cref="SuspensionKind::Multiple"/> a task can be resumed although the condition was
     /// taken back meanwhile (a Reset between a Set and the re-check); a T with WaitRechecks
-    /// absorbs that by waiting again.
+    /// absorbs that by waiting again. With <see cref="SuspensionKind::Single"/> the same happens
+    /// when the waiter reuses the object (a TaskGroup_s of the next round) while the re-check of
+    /// its previous wait is still running.
     /// Wait must be called from a task or from an OS thread converted with
     /// <see cref="ConvertThreadToTask"/>; it suspends the caller if TryWait fails. For
     /// <see cref="SuspensionKind::Single"/>, at most one task may wait at a time.
@@ -70,21 +72,59 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         /// limit.
         /// </param>
         /// <returns>
-        /// <c>true</c> if TryWait succeeded at once or a resumer let the task pass; <c>false</c> if
-        /// it timed out, the task then no longer waits on the object.
+        /// <c>true</c> if TryWait succeeded at once or a resumer let the task pass (with
+        /// WaitRechecks: and TryWait() held after the resume); <c>false</c> if it timed out, the
+        /// task then no longer waits on the object.
         /// </returns>
         /// <remarks>Only for the single-waiter (_s) variants. Task or converted thread only.</remarks>
         /// <seealso cref="Duration"/>
         [[nodiscard]] bool Wait(this auto& self, Duration timeout) noexcept
             requires(_SuspensionKind == SuspensionKind::Single)
         {
-            return self.TryWait() || self.SuspendFor(timeout);
+            if constexpr (!Rechecks)
+                return self.TryWait() || self.SuspendFor(timeout);
+            else {
+                if (self.TryWait())
+                    return true;
+
+                // A resume without the condition waits on for the time that is left.
+                const long long deadline = timeout.IsInfinite() ? 0 : Deadline(timeout);
+                for (;;) {
+                    if (!self.SuspendFor(timeout))
+                        return false;
+                    if (self.TryWait())
+                        return true;
+                    if (!timeout.IsInfinite()) {
+                        const long long left = deadline - Now();
+                        if (left <= 0)
+                            return false;
+                        timeout = Duration{left};
+                    }
+                }
+            }
         }
 
     private:
-        // Whether T declares WaitRechecks as true (see the class remarks). A Single primitive claims
-        // its one waiter with an exchange, so it is never resumed without its condition.
-        static constexpr bool Rechecks = _SuspensionKind == SuspensionKind::Multiple && requires { requires T::WaitRechecks; };
+        // Whether T declares WaitRechecks as true (see the class remarks).
+        static constexpr bool Rechecks = requires { requires T::WaitRechecks; };
+
+        // The clock of a timed wait that waits again, in 100 ns units. Only on the rare path after
+        // a resume without the condition, so the two QPC calls do not matter.
+        static long long Now() noexcept
+        {
+            LARGE_INTEGER counter;
+            LARGE_INTEGER frequency;
+            QueryPerformanceCounter(&counter);
+            QueryPerformanceFrequency(&frequency);
+            return counter.QuadPart / frequency.QuadPart * 10000000 + counter.QuadPart % frequency.QuadPart * 10000000 / frequency.QuadPart;
+        }
+
+        static long long Deadline(Duration timeout) noexcept
+        {
+            const long long now = Now();
+            return timeout.hundredNanoseconds < Duration::Infinite().hundredNanoseconds - now ? now + timeout.hundredNanoseconds
+                                                                                                : Duration::Infinite().hundredNanoseconds;
+        }
 
         // Called by Suspendable::OnSuspended after the task was published: a signal that came
         // between the failed TryWait in Wait and the publication would otherwise be missed.

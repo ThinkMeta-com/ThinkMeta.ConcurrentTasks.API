@@ -29,7 +29,9 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// <remarks>
     /// <see cref="Set"/> lets one waiter pass (or, with no waiter, stays set until one
     /// <see cref="TryWait"/> / <see cref="Wait"/> takes the signal). Several Sets without a waiter
-    /// in between count as one. Comes as <see cref="AutoResetEvent"/> (any number of waiters) and
+    /// in between count as one; with AutoResetEvent, Sets from several threads at the same moment
+    /// may also count as one while tasks wait, so to count every signal use a
+    /// <see cref="Semaphore"/>. Comes as <see cref="AutoResetEvent"/> (any number of waiters) and
     /// <see cref="AutoResetEvent_s"/> (one waiter).
     /// Wait suspends the calling task and needs a task or an OS thread converted with
     /// <see cref="ConvertThreadToTask"/>. Set, <see cref="Reset"/> and TryWait never suspend and

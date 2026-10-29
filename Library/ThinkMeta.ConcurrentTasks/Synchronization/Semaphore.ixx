@@ -141,7 +141,12 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     export using Semaphore = _Semaphore<SuspensionKind::Multiple>;
 
     /// <summary>Counting semaphore for at most one waiting task at a time.</summary>
-    /// <remarks>Cheaper than <see cref="Semaphore"/> and allows timeouts.</remarks>
+    /// <remarks>
+    /// Cheaper than <see cref="Semaphore"/> and allows timeouts.
+    /// A waiter counts as waiting until it runs again, even after a Release has handed it its
+    /// permit. Two tasks that take turns on one permit can therefore wait at the same time; as a
+    /// lock between tasks use <see cref="CriticalSection_s"/> or <see cref="Semaphore"/> instead.
+    /// </remarks>
     /// <seealso cref="Semaphore"/>
     export using Semaphore_s = _Semaphore<SuspensionKind::Single>;
 

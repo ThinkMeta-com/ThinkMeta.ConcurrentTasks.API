@@ -131,15 +131,13 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
         /// <summary>Dequeues a pointer.</summary>
         /// <returns>The dequeued pointer, or <c>nullptr</c> if the queue is empty.</returns>
         /// <remarks>
-        /// Lock-free; callable from any number of threads at once. Under contention the queue can
-        /// look empty for a moment while another consumer is taking an element, so <c>nullptr</c>
-        /// means "try again later", not proof of emptiness.
+        /// Lock-free; callable from any number of threads at once. An element whose Enqueue has
+        /// not returned yet may still be missed.
         /// </remarks>
         /// <seealso cref="Enqueue"/>
-        // That moment: another consumer has taken the head slot but not yet advanced head_. Only
-        // that consumer advances head_ (a consumer that finds the slot taken returns nullptr
-        // without helping), so this relies on its compare_exchange_weak not failing spuriously:
-        // true on x64 (lock cmpxchg); on LL/SC platforms head_ would stay behind for good.
+        // A consumer that finds the head slot taken by another one, which has not advanced head_
+        // yet, advances it itself and looks at the next slot, as Enqueue does for tail_. Returning
+        // nullptr there instead would send a scheduler thread to sleep while elements are queued.
         T* Dequeue() noexcept
         {
             for (;;) {
@@ -152,18 +150,24 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
                 std::atomic_ref<_Node> slotRef(slot);
                 _Node                  node = slotRef.load(std::memory_order_acquire);
 
-                // The slot holds an item of this round only at sequence 2r + 1; anything else means
-                // empty or just taken by another consumer.
-                if (node.sequence != expectedSequence)
+                // The slot holds an item of this round only at sequence 2r + 1. Below it (2r) nothing
+                // was enqueued here yet: a producer advances tail_ only past a filled slot, so no
+                // later slot is filled either and the queue is empty. Above it (2r + 2) another
+                // consumer has taken the item, or head_ was read stale: help and look again.
+                const auto distance = static_cast<std::int64_t>(node.sequence - expectedSequence);
+                if (distance < 0)
                     return nullptr;
+                if (distance > 0) {
+                    head_.compare_exchange_weak(slotIndex, slotIndex + 1, std::memory_order_relaxed, std::memory_order_relaxed);
+                    continue;
+                }
 
                 // Advance only the sequence, to 2(r + 1), the free state of the next round. The stale
                 // value stays in the slot and is ignored, because the sequence alone decides whether
                 // a slot is full.
                 // This 8-byte CAS on slot.sequence and the 16-byte accesses to the whole slot in
                 // Enqueue touch the same memory with different widths. The C++ memory model does not
-                // cover such mixed-size atomics; x64 keeps them coherent (a second x64 assumption next
-                // to the compare_exchange_weak on head_, see above).
+                // cover such mixed-size atomics; x64 keeps them coherent.
                 auto                           newSequence{node.sequence + 1};
                 std::atomic_ref<std::uint64_t> sequenceRef(slot.sequence);
 

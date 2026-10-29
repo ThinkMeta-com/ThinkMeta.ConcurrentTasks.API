@@ -651,14 +651,15 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
         void WriteLoop() noexcept
         {
-            const std::uint64_t segment = settings_.segmentSize;
             for (;;) {
                 // The copy tasks' bytes are visible here through a chain of release/acquire pairs:
                 // Batch::done (copy task -> producer's Retire), then doneTo_ (producer -> writer).
                 // Read final_ first: when it is set, doneTo_ already holds the final position.
+                // settings_ only once doneTo_ has moved: the writer may start before Open, which
+                // writes them, and doneTo_ is published after it.
                 const bool          final = final_.load(std::memory_order_acquire);
                 const std::uint64_t done  = doneTo_.load(std::memory_order_acquire);
-                const std::uint64_t end   = final ? done : done / segment * segment;
+                const std::uint64_t end   = final || done == 0 ? done : done / settings_.segmentSize * settings_.segmentSize;
                 while (issuedTo_ < end) {
                     if (issued_ - completed_ == settings_.writesInFlight)
                         CompleteOldest(true);

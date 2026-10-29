@@ -230,13 +230,14 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// <seealso cref="WaitableAsyncSocketRecvIoRequest"/>
     export using WaitableAsyncSocketRecvIoRequest_s = _WaitableAsyncSocketIoRequest<AsyncSocketRecvIoRequest, SuspensionKind::Single>;
 
-    /// <summary>Satisfied by exactly the four waitable request types above.</summary>
+    /// <summary>Satisfied by the two single-waiter request types above.</summary>
     /// <typeparam name="T">
-    /// The type to test: <see cref="WaitableAsyncSocketIoRequest"/>, <see cref="WaitableAsyncSocketIoRequest_s"/>,
-    /// <see cref="WaitableAsyncSocketRecvIoRequest"/> or <see cref="WaitableAsyncSocketRecvIoRequest_s"/>.
+    /// The type to test: <see cref="WaitableAsyncSocketIoRequest_s"/> or <see cref="WaitableAsyncSocketRecvIoRequest_s"/>.
     /// </typeparam>
-    /// <remarks>Accepted by <see cref="AsyncSocket"/>'s waiting helpers.</remarks>
+    /// <remarks>
+    /// Accepted by <see cref="AsyncSocket"/>'s waiting helpers. They wait with a timeout and keep the request in the
+    /// caller's frame, which only the single-waiter types allow.
+    /// </remarks>
     export template <typename T>
-    concept WaitableAsyncSocketIoRequestType = std::same_as<T, WaitableAsyncSocketIoRequest> || std::same_as<T, WaitableAsyncSocketIoRequest_s>
-        || std::same_as<T, WaitableAsyncSocketRecvIoRequest> || std::same_as<T, WaitableAsyncSocketRecvIoRequest_s>;
+    concept WaitableAsyncSocketIoRequestType = std::same_as<T, WaitableAsyncSocketIoRequest_s> || std::same_as<T, WaitableAsyncSocketRecvIoRequest_s>;
 } // namespace ThinkMeta::ConcurrentTasks::AsyncIo

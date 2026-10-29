@@ -107,6 +107,20 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
         // must not let the waiter pass a second time with the next round still running.
         TEST_METHOD(TestTaskGroupReuseBySameWaiter)
         {
+            CheckReuseBySameWaiter<Synchronization::TaskGroup>();
+        }
+
+        // The same with TaskGroup_s, once with Wait() and once with a timed Wait: the late re-check
+        // of the previous round's wait may resume the waiter of the next round, which must wait on.
+        TEST_METHOD(TestTaskGroupSingleWaiterReuseBySameWaiter)
+        {
+            CheckReuseBySameWaiter<Synchronization::TaskGroup_s>();
+            CheckReuseBySameWaiter<Synchronization::TaskGroup_s, true>();
+        }
+
+        template <class Group, bool Timed = false>
+        static void CheckReuseBySameWaiter()
+        {
             for (DWORD numThreads : GetMultiThreadTestCounts()) {
                 ConvertThreadToTask();
 
@@ -121,8 +135,8 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 std::atomic<int>  roundsDone{0};
 
                 auto waiter = Tasks::Task::Create([&]() {
-                    Synchronization::TaskGroup group;
-                    std::atomic<int>           running{0};
+                    Group            group;
+                    std::atomic<int> running{0};
                     for (int round = 0; round < Rounds; ++round) {
                         std::unique_ptr<ActionTask> tasks[TasksPerRound];
                         for (auto& task : tasks) {
@@ -136,7 +150,11 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                         }
                         for (auto& task : tasks)
                             GetTaskScheduler()->AddTask(task.get(), TaskPriority::Normal);
-                        group.Wait();
+                        if constexpr (Timed) {
+                            if (!group.Wait(Duration::Seconds(60)))
+                                passedEarly.store(true, std::memory_order_release);
+                        } else
+                            group.Wait();
                         if (running.load(std::memory_order_acquire) != 0 || !group.TryWait())
                             passedEarly.store(true, std::memory_order_release);
                         roundsDone.fetch_add(1, std::memory_order_release);
