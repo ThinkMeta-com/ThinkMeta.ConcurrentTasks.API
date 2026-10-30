@@ -64,7 +64,16 @@ namespace {
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
+    // Removed again when the test DLL unloads: the test host outlives it and raises exceptions of its
+    // own while it shuts down, which would otherwise call into unloaded code.
     struct Install {
-        Install() noexcept { AddVectoredExceptionHandler(1, OnException); }
+        Install() noexcept : handler_(AddVectoredExceptionHandler(1, OnException)) {}
+        ~Install()
+        {
+            if (handler_)
+                RemoveVectoredExceptionHandler(handler_);
+        }
+
+        void* handler_;
     } install;
 } // namespace

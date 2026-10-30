@@ -1,8 +1,8 @@
 {
 "product": "ThinkMeta.ConcurrentTasks.Core",
-"version": "0.1.2",
+"version": "0.2.0",
 "configuration": "Release|x64",
-"internalCommit": "ecfc555",
-"sha256": "94A5772481CCD21EE4478CAFA88FA86415771BB6325EFE8B32788B8902C7392F",
-"deployedUtc": "2026-10-29T10:46:19Z"
+"internalCommit": "6fc493e",
+"sha256": "AA039D30C9E770069B8D75FB6749FDDBE4CD85F4EBC863B1F869CF55C95C258B",
+"deployedUtc": "2026-10-30T11:20:58Z"
 }

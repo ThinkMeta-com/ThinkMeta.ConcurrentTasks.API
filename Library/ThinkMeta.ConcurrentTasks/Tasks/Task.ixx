@@ -86,6 +86,20 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
         /// <seealso cref="CancelSchedule"/>
         void Schedule(TaskPriority taskPriority = TaskPriority::Default) noexcept { GetTaskScheduler()->AddTask(this, taskPriority); }
 
+        /// <summary>Adds the task to the given scheduler.</summary>
+        /// <param name="scheduler">The scheduler to run the task on.</param>
+        /// <param name="taskPriority">
+        /// Priority the task runs with; <see cref="TaskPriority::Default"/> inherits the calling task's
+        /// priority.
+        /// </param>
+        /// <remarks>
+        /// Uses <see cref="ITaskScheduler::AddTask"/>; any thread or task. Use it to hand work to
+        /// another scheduler, e.g. from a task of a dispatcher scheduler (a UI event handler) to the
+        /// worker threads of a default scheduler: there the calling task's own scheduler, which
+        /// <see cref="Schedule(TaskPriority)"/> uses, is the UI thread.
+        /// </remarks>
+        void Schedule(ITaskScheduler& scheduler, TaskPriority taskPriority = TaskPriority::Default) noexcept { scheduler.AddTask(this, taskPriority); }
+
         /// <summary>Adds the task to the calling task's scheduler after a delay.</summary>
         /// <param name="taskPriority">
         /// Priority the task runs with; <see cref="TaskPriority::Default"/> inherits the calling task's

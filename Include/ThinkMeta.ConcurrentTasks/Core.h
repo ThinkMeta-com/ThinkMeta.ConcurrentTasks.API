@@ -443,6 +443,61 @@ namespace ThinkMeta::ConcurrentTasks {
         virtual bool AddTimedTask(ITask* task, TaskPriority priority, Duration delay) noexcept = 0;
     };
 
+    /// <summary>A scheduler that runs its tasks on a thread with an event loop of its own, such as a UI thread.</summary>
+    /// <remarks>
+    /// Created by <see cref="CreateDispatcherScheduler"/> on that thread, which it is bound to. The
+    /// scheduler has no threads; the event loop drives it. A task starts with <see cref="RunTask"/>,
+    /// typically from an event handler, and runs at once until it ends or waits. When a waiting task
+    /// can go on (<see cref="ResumeTask"/>, <see cref="AddTask"/>, a timer), the scheduler hands it to
+    /// the loop through the <see cref="DispatcherWakeProc"/>, and the loop passes it to
+    /// <see cref="ContinueTask"/>.
+    ///
+    /// The bound thread stays an ordinary thread: only the tasks can wait. A task always returns to
+    /// whoever entered it last, so handlers that start or continue tasks get control back before they
+    /// return themselves; tasks may also be started or continued from within other tasks and from
+    /// modal loops inside them.
+    ///
+    /// <see cref="Start"/> does nothing. <see cref="Stop"/> and <see cref="Destroy"/> are called once
+    /// no task waits or is on its way to the loop; Stop on the bound thread.
+    /// </remarks>
+    /// <seealso cref="CreateDispatcherScheduler"/>
+    struct CT_NOVTABLE IDispatcherScheduler : ITaskScheduler {
+        /// <summary>Runs a task now, on the bound thread.</summary>
+        /// <param name="task">
+        /// The task to run; required. Owned by the caller and must stay valid until its
+        /// <see cref="INotifyTaskStateChange::OnTaskExited"/> has been called.
+        /// </param>
+        /// <remarks>
+        /// Returns when the task has ended or waits. Only on the bound thread.
+        /// </remarks>
+        virtual void RunTask(ITask* task) noexcept = 0;
+
+        /// <summary>Runs a task the scheduler handed to the event loop, on the bound thread.</summary>
+        /// <param name="task">
+        /// A handle the <see cref="DispatcherWakeProc"/> of this scheduler received; each exactly once.
+        /// </param>
+        /// <remarks>
+        /// Continues a task that was resumed or yielded, or starts one added by
+        /// <see cref="AddTask"/>. Returns when the task has ended or waits again. Only on the bound
+        /// thread.
+        /// </remarks>
+        virtual void ContinueTask(SuspendedTask task) noexcept = 0;
+    };
+
+    /// <summary>Hands a task that can run to the event loop of a dispatcher scheduler.</summary>
+    /// <param name="scheduler">The scheduler the task belongs to.</param>
+    /// <param name="task">The task; the loop passes it to <see cref="IDispatcherScheduler::ContinueTask"/>.</param>
+    /// <param name="context">The context given to <see cref="CreateDispatcherScheduler"/>.</param>
+    /// <remarks>
+    /// Called once for every task that can run, on any thread, also on the bound thread itself. It
+    /// must not block and must not lose the task: a window posts a message carrying it, for example.
+    /// A message to a window also reaches modal loops (message boxes, moving a window, menus), unlike a
+    /// thread message. Posted messages are limited (10,000 per thread by default); every waiting task
+    /// is on its way at most once.
+    /// </remarks>
+    /// <seealso cref="CreateDispatcherScheduler"/>
+    using DispatcherWakeProc = void (*)(IDispatcherScheduler* scheduler, SuspendedTask task, void* context) noexcept;
+
     /// <summary>Called on each scheduler thread when it starts and when it exits.</summary>
     /// <param name="taskScheduler">The scheduler the thread belongs to.</param>
     /// <param name="threadIndex">0-based index of the thread within its scheduler.</param>
@@ -514,6 +569,18 @@ namespace ThinkMeta::ConcurrentTasks {
     /// </returns>
     /// <seealso cref="ITaskScheduler::Destroy"/>
     CT_CORE ITaskScheduler* CreateTaskScheduler(SchedulerKind kind, const SchedulerInfo* info) noexcept;
+
+    /// <summary>Creates a dispatcher scheduler bound to the calling thread.</summary>
+    /// <param name="wake">Hands tasks that can run to the thread's event loop; required.</param>
+    /// <param name="context">Passed unchanged to <paramref name="wake"/>; must outlive the scheduler.</param>
+    /// <returns>The scheduler, or <c>nullptr</c> if <paramref name="wake"/> is null or memory ran out.</returns>
+    /// <remarks>
+    /// The calling thread is bound, not converted: outside the scheduler's tasks it stays an ordinary
+    /// thread, and <see cref="GetTaskScheduler"/> works only inside them.
+    /// </remarks>
+    /// <seealso cref="IDispatcherScheduler"/>
+    /// <seealso cref="ITaskScheduler::Destroy"/>
+    CT_CORE IDispatcherScheduler* CreateDispatcherScheduler(DispatcherWakeProc wake, void* context) noexcept;
 
     /// <summary>Returns the scheduler running the calling task.</summary>
     /// <returns>The scheduler; owned by its creator, not by the caller.</returns>

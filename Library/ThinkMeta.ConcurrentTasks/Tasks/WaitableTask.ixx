@@ -2,7 +2,7 @@
 // Copyright (c) 2026 ThinkMeta Software GmbH
 //
 // WaitableTask: a Task that others can wait for until it has exited, built on a
-// ManualResetEvent that OnTaskExited sets.
+// ManualResetEvent that OnTaskExited sets; WaitableLambdaTask, one that runs a callable.
 //
 // Preliminary API: everything in this file is subject to change.
 //
@@ -10,6 +10,8 @@
 module;
 
 #include <concepts>
+#include <type_traits>
+#include <utility>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 
@@ -22,6 +24,9 @@ import ThinkMeta.ConcurrentTasks.Synchronization.ManualResetEvent;
 namespace ThinkMeta::ConcurrentTasks::Tasks {
     using Synchronization::SuspensionKind;
     using Synchronization::_ManualResetEvent;
+
+    template <SuspensionKind _SuspensionKind, std::invocable F>
+    class _WaitableLambdaTask;
 
     /// <summary>A <see cref="Task"/> that others can wait for until it has exited.</summary>
     /// <typeparam name="_SuspensionKind">
@@ -89,8 +94,70 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
                 notifyTaskStateChange->OnTaskExited();
         }
 
+        /// <summary>Returns a waitable task that runs a callable.</summary>
+        /// <typeparam name="F">
+        /// Type of the callable: invocable without arguments; it must not throw.
+        /// </typeparam>
+        /// <param name="func">The callable; stored by value (copied or moved).</param>
+        /// <param name="notifyTaskStateChange">
+        /// Told when the task exits; borrowed, must stay valid until then. May be <c>nullptr</c>.
+        /// </param>
+        /// <returns>
+        /// The unscheduled task, a <see cref="_WaitableLambdaTask"/> of this suspension kind and the
+        /// decayed callable type.
+        /// </returns>
+        /// <remarks>
+        /// Hides <see cref="Task::Create"/>, which returns a task that cannot be waited for. Keep the
+        /// task in a variable that outlives it, schedule it and wait for it:
+        /// <c>auto task = WaitableTask_s::Create(f); task.Schedule(scheduler); task.Wait();</c>
+        /// References captured by func must stay valid until the task has exited.
+        /// </remarks>
+        template <std::invocable F>
+        static auto Create(F&& func, INotifyTaskStateChange* notifyTaskStateChange = nullptr) noexcept
+        {
+            return _WaitableLambdaTask<_SuspensionKind, std::decay_t<F>>(std::forward<F>(func), notifyTaskStateChange);
+        }
+
+    protected:
+        /// <summary>Constructs the task.</summary>
+        /// <param name="notifyTaskStateChange">Told when the task exits; may be <c>nullptr</c>.</param>
+        explicit _WaitableTask(INotifyTaskStateChange* notifyTaskStateChange = nullptr) noexcept : Task(notifyTaskStateChange) {}
+
     private:
         _ManualResetEvent<_SuspensionKind> event_;
+    };
+
+    /// <summary>A waitable task that runs a stored callable.</summary>
+    /// <typeparam name="_SuspensionKind">As for <see cref="_WaitableTask"/>.</typeparam>
+    /// <typeparam name="F">
+    /// Type of the stored callable: an object type invocable without arguments; it must not throw.
+    /// </typeparam>
+    /// <remarks>
+    /// The waitable counterpart of <see cref="LambdaTask"/>. Usually built by
+    /// <see cref="_WaitableTask::Create"/>; comes as <see cref="WaitableLambdaTask"/> and
+    /// <see cref="WaitableLambdaTask_s"/>. The callable must not throw: an exception escaping it ends
+    /// the process.
+    /// </remarks>
+    export template <SuspensionKind _SuspensionKind, std::invocable F>
+    class _WaitableLambdaTask : public _WaitableTask<_SuspensionKind>
+    {
+    public:
+        /// <summary>Stores the callable.</summary>
+        /// <typeparam name="FF">Type of the argument; <typeparamref name="F"/> must be constructible from it.</typeparam>
+        /// <param name="func">Copied or moved into <typeparamref name="F"/>.</param>
+        /// <param name="notifyTaskStateChange">Told when the task exits; may be <c>nullptr</c>.</param>
+        template <typename FF>
+            requires std::constructible_from<F, FF&&>
+        explicit _WaitableLambdaTask(FF&& func, INotifyTaskStateChange* notifyTaskStateChange = nullptr) noexcept
+            : _WaitableTask<_SuspensionKind>(notifyTaskStateChange), func_(std::forward<FF>(func))
+        {
+        }
+
+        /// <summary>Calls the stored callable.</summary>
+        void Run() noexcept override { func_(); }
+
+    private:
+        F func_;
     };
 
     /// <summary><see cref="_WaitableTask"/> for any number of waiting tasks.</summary>
@@ -101,6 +168,17 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
     /// <remarks>Cheaper, and <see cref="_WaitableTask::Wait"/> accepts a timeout.</remarks>
     /// <seealso cref="WaitableTask"/>
     export using WaitableTask_s = _WaitableTask<SuspensionKind::Single>;
+
+    /// <summary><see cref="_WaitableLambdaTask"/> for any number of waiting tasks.</summary>
+    /// <typeparam name="F">Type of the stored callable.</typeparam>
+    export template <std::invocable F>
+    using WaitableLambdaTask = _WaitableLambdaTask<SuspensionKind::Multiple, F>;
+
+    /// <summary><see cref="_WaitableLambdaTask"/> for at most one waiting task at a time.</summary>
+    /// <typeparam name="F">Type of the stored callable.</typeparam>
+    /// <remarks>Cheaper, and Wait accepts a timeout; the waiter may destroy it as soon as Wait returned.</remarks>
+    export template <std::invocable F>
+    using WaitableLambdaTask_s = _WaitableLambdaTask<SuspensionKind::Single, F>;
 
     /// <summary>Matches the waitable task types of this module.</summary>
     /// <typeparam name="T">The candidate type.</typeparam>

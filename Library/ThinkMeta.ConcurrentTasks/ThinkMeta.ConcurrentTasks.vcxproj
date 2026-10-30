@@ -50,6 +50,8 @@
     <ClCompile Include="Synchronization/ManualResetEvent.ixx" />
     <ClCompile Include="Synchronization/Semaphore.ixx" />
     <ClCompile Include="Tasks/Task.ixx" />
+    <ClCompile Include="Tasks\RunAndWait.ixx" />
+    <ClCompile Include="Schedulers\DispatcherScheduler.ixx" />
     <ClCompile Include="Synchronization/TaskGroup.ixx" />
     <ClCompile Include="Collections/BoundedPointerQueue.ixx" />
     <ClCompile Include="Synchronization/Waitable.ixx" />
@@ -63,6 +65,7 @@
     <ClCompile Include="Windows\Thread.ixx" />
     <ClCompile Include="Windows\VirtualMemory.ixx" />
     <ClCompile Include="Windows\WinsockError.ixx" />
+    <ClCompile Include="WinRT\Await.ixx" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Defs.h" />

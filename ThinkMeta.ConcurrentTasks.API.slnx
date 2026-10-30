@@ -14,6 +14,9 @@
     <Project Path="Samples/Docs/AsyncFileCopy/ThinkMeta.ConcurrentTasks.Samples.Docs.AsyncFileCopy.vcxproj" Id="2a502043-bf08-4f53-847c-64726fd0b8d5">
       <Platform Project="x64" />
     </Project>
+    <Project Path="Samples/Docs/BluetoothDevices/ThinkMeta.ConcurrentTasks.Samples.Docs.BluetoothDevices.vcxproj" Id="b1e7007a-0002-4000-8000-000000000002">
+      <Platform Project="x64" />
+    </Project>
     <Project Path="Samples/Docs/GuideAsyncFiles/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideAsyncFiles.vcxproj" Id="5f2b5ec7-7718-4a1f-96e1-5b39131fb2ff">
       <Platform Project="x64" />
     </Project>
@@ -45,6 +48,9 @@
       <Platform Project="x64" />
     </Project>
     <Project Path="Samples/Docs/GuideTimeouts/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideTimeouts.vcxproj" Id="60b3090b-8c28-4d1d-a88b-466bac1267a7">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="Samples/Docs/GuideUiThread/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideUiThread.vcxproj" Id="0d15a7c4-0003-4000-8000-000000000003">
       <Platform Project="x64" />
     </Project>
     <Project Path="Samples/Docs/GuideWaitingForTasks/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideWaitingForTasks.vcxproj" Id="60c60185-aa9e-4984-a930-8c8da92cbd23">

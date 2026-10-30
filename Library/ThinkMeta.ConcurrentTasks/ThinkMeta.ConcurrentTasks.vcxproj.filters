@@ -46,6 +46,12 @@
     <ClCompile Include="Tasks/Task.ixx">
       <Filter>Tasks</Filter>
     </ClCompile>
+    <ClCompile Include="Tasks\RunAndWait.ixx">
+      <Filter>Tasks</Filter>
+    </ClCompile>
+    <ClCompile Include="Schedulers\DispatcherScheduler.ixx">
+      <Filter>Schedulers</Filter>
+    </ClCompile>
     <ClCompile Include="AsyncIo\AsyncIo.ixx">
       <Filter>Async I/O</Filter>
     </ClCompile>
@@ -103,6 +109,9 @@
     <ClCompile Include="Windows\WinsockError.ixx">
       <Filter>Windows</Filter>
     </ClCompile>
+    <ClCompile Include="WinRT\Await.ixx">
+      <Filter>WinRT</Filter>
+    </ClCompile>
     <ClCompile Include="Windows\Socket.ixx">
       <Filter>Windows</Filter>
     </ClCompile>
@@ -155,6 +164,9 @@
     </Filter>
     <Filter Include="Memory">
       <UniqueIdentifier>{dd235951-acee-49c9-a629-7f6fb158e775}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="WinRT">
+      <UniqueIdentifier>{5f0c7a3e-2b6d-4e81-9c4a-7d3e1b2a6f90}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>
