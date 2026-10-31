@@ -67,9 +67,9 @@ int main()
 
         auto demo = Task::Create([&] {
             // [wait-timeout]
-            // 1. Nobody sets the event: the wait times out and returns false.
+            // 1. Nobody sets the event: the wait times out.
             auto start = Clock::now();
-            timedOut   = !event.Wait(Duration::Milliseconds(50));
+            timedOut   = event.Wait(Duration::Milliseconds(50)) == TC::WaitStatus::TimedOut;
             std::printf("Wait without Set: %s after %lld ms\n",
                         timedOut ? "timed out" : "signaled",
                         MillisecondsSince(start));
@@ -77,11 +77,11 @@ int main()
 
             // [timed-start]
             // 2. A task started by time sets the event after 100 ms; the wait with
-            // a 1 s limit returns true as soon as it does. Schedule with a delay
-            // must be called from a task and fails only without EnableTimers.
+            // a 1 s limit returns Signaled as soon as it does. Schedule with a
+            // delay must be called from a task and fails only without EnableTimers.
             start = Clock::now();
             if (setter.Schedule(TaskPriority::Default, Duration::Milliseconds(100)))
-                signaled = event.Wait(Duration::Seconds(1));
+                signaled = event.Wait(Duration::Seconds(1)) == TC::WaitStatus::Signaled;
             std::printf("Wait with a timed Set: %s after %lld ms\n",
                         signaled ? "signaled" : "timed out",
                         MillisecondsSince(start));
@@ -101,7 +101,7 @@ int main()
             // running.
             cancelAccepted
                 = cancelled.Schedule(TaskPriority::Default, Duration::Seconds(10))
-                && cancelled.CancelSchedule();
+                && cancelled.Cancel();
             std::printf("Timed start cancelled: %s\n",
                         cancelAccepted ? "yes" : "no");
             // [/cancel]

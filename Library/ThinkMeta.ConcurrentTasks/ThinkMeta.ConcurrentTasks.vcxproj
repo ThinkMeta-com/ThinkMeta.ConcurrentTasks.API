@@ -65,6 +65,9 @@
     <ClCompile Include="Windows\Thread.ixx" />
     <ClCompile Include="Windows\VirtualMemory.ixx" />
     <ClCompile Include="Windows\WinsockError.ixx" />
+    <ClCompile Include="Synchronization\CallbackAwait.ixx" />
+    <ClCompile Include="Windows\HandleAwait.ixx" />
+    <ClCompile Include="MediaFoundation\EventAwait.ixx" />
     <ClCompile Include="WinRT\Await.ixx" />
   </ItemGroup>
   <ItemGroup>

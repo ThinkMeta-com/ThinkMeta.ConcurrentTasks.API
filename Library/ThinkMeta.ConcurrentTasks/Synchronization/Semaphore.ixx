@@ -68,7 +68,9 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         /// <summary>Takes one permit, waiting for it if necessary.</summary>
         /// <remarks>
         /// Suspends the calling task until a <see cref="Release"/> hands it a permit. Task or
-        /// converted thread only; <see cref="Semaphore_s"/>: at most one waiter at a time.
+        /// converted thread only; <see cref="Semaphore_s"/>: at most one waiter at a time. A
+        /// <see cref="CancelTask"/> does not end it; with <see cref="Semaphore_s"/>,
+        /// <see cref="Wait(Duration)"/> with <see cref="Duration::Infinite"/> waits until either.
         /// </remarks>
         /// <seealso cref="TryWait"/>
         void Wait() noexcept
@@ -79,16 +81,20 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
 
         /// <summary>Takes one permit, waiting for it with a time limit.</summary>
         /// <param name="timeout">
-        /// The longest time to wait. Needs <see cref="EnableTimers"/>; without it the wait has no
-        /// limit.
+        /// The longest time to wait. Needs <see cref="EnableTimers"/>; without it, or with
+        /// <see cref="Duration::Infinite"/>, the wait has no limit.
         /// </param>
-        /// <returns><c>true</c> if a permit was taken; <c>false</c> if it timed out, no permit was taken then.</returns>
+        /// <returns>
+        /// <see cref="WaitStatus::Signaled"/> if a permit was taken; <see cref="WaitStatus::TimedOut"/>
+        /// if it timed out; <see cref="WaitStatus::Cancelled"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>). Unless signaled, no permit was taken.
+        /// </returns>
         /// <remarks><see cref="Semaphore_s"/> only. Task or converted thread only.</remarks>
         /// <seealso cref="TryWait"/>
-        [[nodiscard]] bool Wait(Duration timeout) noexcept
+        [[nodiscard]] WaitStatus Wait(Duration timeout) noexcept
             requires(_SuspensionKind == SuspensionKind::Single)
         {
-            return TryWait() || this->SuspendFor(timeout);
+            return TryWait() ? WaitStatus::Signaled : this->SuspendFor(timeout);
         }
 
         /// <summary>Takes one permit if one is available.</summary>

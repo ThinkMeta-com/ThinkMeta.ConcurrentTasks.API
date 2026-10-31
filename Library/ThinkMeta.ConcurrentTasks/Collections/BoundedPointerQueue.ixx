@@ -183,6 +183,23 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
             }
         }
 
+        /// <summary>Tells whether the queue looked empty a moment ago.</summary>
+        /// <returns><c>true</c> if the head slot held no element.</returns>
+        /// <remarks>
+        /// A snapshot for heuristics (e.g. whether another consumer is worth waking): it can be
+        /// stale as soon as it returns, and it does not order anything. An element whose Enqueue has
+        /// not returned yet may be missed, as in <see cref="Dequeue"/>.
+        /// </remarks>
+        bool IsEmpty() const noexcept
+        {
+            const auto slotIndex        = head_.load(std::memory_order_relaxed);
+            const auto expectedSequence = (slotIndex >> ring_.shift) * 2 + 1;
+
+            // the sequence alone decides whether a slot is full (see Dequeue)
+            std::atomic_ref<std::uint64_t> sequenceRef(const_cast<std::uint64_t&>(ring_.nodes[slotIndex & ring_.mask].sequence));
+            return static_cast<std::int64_t>(sequenceRef.load(std::memory_order_acquire) - expectedSequence) < 0;
+        }
+
     private:
         /// <summary>One slot of the queue.</summary>
         /// <remarks>Contains the pointer value and a sequence number for ABA prevention.</remarks>

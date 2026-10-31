@@ -60,7 +60,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// (without it the wait has no limit). On expiry the operation is cancelled (<c>CancelIoEx</c>), the
     /// call still waits until the cancellation has completed, and <see cref="Windows::WinsockError::TimedOut"/>
     /// is returned; if the operation completed before the cancellation took effect, its own result stands.
-    /// After a cancelled operation a stream socket is fit for closing only (data may have been lost).
+    /// A <see cref="CancelTask"/> of the waiting task ends the wait the same way, also without a limit, and
+    /// gives <see cref="Windows::WinsockError::OperationAborted"/> (a task cancelled before the call cancels
+    /// the operation at once). After a cancelled operation a stream socket is fit for closing only (data
+    /// may have been lost).
     ///
     /// Errors are reported as <see cref="Windows::WinsockErrorCode"/> (WSA* values); nothing throws.
     /// Several operations may be outstanding at once (e.g. one receive and one send), each with its own
@@ -176,7 +179,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>
         /// Task only; suspends the calling task until a connection has been accepted into
@@ -255,7 +259,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>
         /// Task only; suspends the calling task until connected.
@@ -308,7 +313,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         /// <seealso cref="DisconnectAsync"/>
@@ -396,7 +402,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>
         /// Task only; suspends the calling task. <see cref="WinsockError::Success"/> with <c>0</c> bytes on a
@@ -450,7 +457,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>
         /// Task only; suspends the calling task. <see cref="WinsockError::Success"/> with <c>0</c> bytes on a
@@ -498,7 +506,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>
         /// Task only; suspends the calling task. <see cref="WinsockError::Success"/> with <c>0</c> bytes on a
@@ -548,7 +557,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>
         /// Task only; suspends the calling task. <see cref="WinsockError::Success"/> with <c>0</c> bytes on a
@@ -603,7 +613,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         /// <seealso cref="SendAsync"/>
@@ -650,7 +661,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         WinsockErrorCode Send(WSABUF* buffers, DWORD bufferCount, DWORD* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
@@ -696,7 +708,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         WinsockErrorCode Send(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD flags,
@@ -741,7 +754,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         WinsockErrorCode Send(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
@@ -869,7 +883,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         template <Windows::SockAddrType _SockAddr>
@@ -938,7 +953,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         template <Windows::SockAddrType _SockAddr>
@@ -997,7 +1013,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         template <Windows::SockAddrType _SockAddr>
@@ -1063,7 +1080,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         template <Windows::SockAddrType _SockAddr>
@@ -1196,7 +1214,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         template <Windows::SockAddrType _SockAddr>
@@ -1258,7 +1277,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         template <Windows::SockAddrType _SockAddr>
@@ -1320,7 +1340,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         template <Windows::SockAddrType _SockAddr>
@@ -1379,7 +1400,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         template <Windows::SockAddrType _SockAddr>
@@ -1426,7 +1448,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         /// <seealso cref="RecvMsgAsync"/>
@@ -1471,7 +1494,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         /// <seealso cref="SendMsgAsync"/>
@@ -1522,7 +1546,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>
         /// Task only; suspends the calling task until the operation has completed. The file handle stays owned
@@ -1571,7 +1596,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if <paramref name="timeout"/> expired and
-        /// the operation was cancelled, or the operation's WSA error.
+        /// the operation was cancelled, <see cref="WinsockError::OperationAborted"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
         /// <seealso cref="TransmitPacketsAsync"/>
@@ -1644,28 +1670,28 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// The operation's final error: <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/> if
-        /// <paramref name="timeout"/> expired and the operation was cancelled, or the WSA error.
+        /// <paramref name="timeout"/> expired and the operation was cancelled, <see cref="WinsockError::OperationAborted"/>
+        /// if the task was cancelled (<see cref="CancelTask"/>), or the WSA error.
         /// </returns>
         /// <remarks>
         /// If <paramref name="error"/> is <see cref="WinsockError::Pending"/>, suspends the calling task until
-        /// the request completes (or <paramref name="timeout"/> expires, then cancels and returns
-        /// <see cref="WinsockError::TimedOut"/>, see the class remarks); then stores the bytes transferred
-        /// (<c>0</c> on failure). Task only. The request must live in the caller's frame until this returns.
+        /// the request completes (or <paramref name="timeout"/> expires or the task is cancelled, then cancels
+        /// the operation, see the class remarks); then stores the bytes transferred (<c>0</c> on failure).
+        /// Task only. The request must live in the caller's frame until this returns.
         /// </remarks>
         template <WaitableAsyncSocketIoRequestType _Request>
         WinsockErrorCode WaitForAsyncIoOperation(WinsockErrorCode error, DWORD* bytesTransferred, _Request& asyncIoRequest,
                                                  Duration timeout = Duration::Infinite()) noexcept
         {
             if (WinsockError::IsPending(error)) {
-                if (timeout.IsInfinite())
-                    asyncIoRequest.Wait();
-                else if (!asyncIoRequest.Wait(timeout)) {
-                    // Timed out: cancel the operation, then wait for its completion without a limit -
-                    // the OVERLAPPED lives in this frame. If it completed meanwhile, its result stands.
-                    // A cancelled socket operation leaves the socket fit for closing only.
+                // ends on the timeout or on a cancel of the task, also without a limit
+                if (const auto status = asyncIoRequest.Wait(timeout); status != WaitStatus::Signaled) {
+                    // Timed out or cancelled: cancel the operation, then wait for its completion without
+                    // a limit - the OVERLAPPED lives in this frame. If it completed meanwhile, its result
+                    // stands. A cancelled socket operation leaves the socket fit for closing only.
                     CancelIoEx(reinterpret_cast<HANDLE>(GetSocket()), &asyncIoRequest.GetOverlapped());
                     asyncIoRequest.Wait();
-                    if (asyncIoRequest.GetError() == WinsockError::OperationAborted) {
+                    if (asyncIoRequest.GetError() == WinsockError::OperationAborted && status == WaitStatus::TimedOut) {
                         if (bytesTransferred)
                             *bytesTransferred = 0;
                         return WinsockError::TimedOut;

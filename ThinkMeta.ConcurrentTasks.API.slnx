@@ -20,6 +20,9 @@
     <Project Path="Samples/Docs/GuideAsyncFiles/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideAsyncFiles.vcxproj" Id="5f2b5ec7-7718-4a1f-96e1-5b39131fb2ff">
       <Platform Project="x64" />
     </Project>
+    <Project Path="Samples/Docs/GuideCancellation/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideCancellation.vcxproj" Id="da2c5a2c-5c81-4664-8477-605643beb663">
+      <Platform Project="x64" />
+    </Project>
     <Project Path="Samples/Docs/GuideCustomPrimitives/ThinkMeta.ConcurrentTasks.Samples.Docs.GuideCustomPrimitives.vcxproj" Id="7b9cd427-e8b3-4b32-81ad-dae28819b8cb">
       <Platform Project="x64" />
     </Project>

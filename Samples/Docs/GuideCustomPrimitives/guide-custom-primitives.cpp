@@ -41,12 +41,13 @@ public:
         return value;
     }
 
-    // Returns false if nothing arrived in time (needs EnableTimers, else no limit).
+    // Returns false if nothing arrived in time (needs EnableTimers, else no limit)
+    // or the task was cancelled.
     bool Take(int& value, TC::Duration timeout) noexcept
     {
         while ((value = value_.exchange(0, std::memory_order_acq_rel)) == 0)
-            if (!TC::SuspendTaskFor(this, timeout))
-                return false; // OnTimeout took the task back
+            if (TC::SuspendTaskFor(this, timeout) != TC::WaitStatus::Signaled)
+                return false; // OnWithdraw took the task back
         return true;
     }
 
@@ -63,9 +64,9 @@ private:
                 TC::ResumeTask(waiter);
     }
 
-    // Runs on the timer thread while the task is still suspended: take the handle
-    // back, or report that a resumer has it already.
-    bool OnTimeout(TC::SuspendedTask task) noexcept override
+    // Runs on the timer thread (timeout) or the canceller's thread while the task
+    // is still suspended: take the handle back, or report that a resumer has it.
+    bool OnWithdraw(TC::SuspendedTask task) noexcept override
     {
         TC::SuspendedTask expected = task;
         return waiter_.compare_exchange_strong(expected, nullptr,

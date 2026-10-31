@@ -202,15 +202,16 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         /// waits without a timeout.
         /// </param>
         /// <returns>
-        /// <c>true</c> if a resumer ended the wait; <c>false</c> if it timed out (see
+        /// How the wait ended: <see cref="WaitStatus::Signaled"/> by a resumer,
+        /// <see cref="WaitStatus::TimedOut"/> or <see cref="WaitStatus::Cancelled"/> (see
         /// <see cref="SuspendTaskFor"/>).
         /// </returns>
         /// <seealso cref="Suspend"/>
-        bool SuspendFor(Duration timeout) noexcept { return SuspendTaskFor(this, timeout); }
+        WaitStatus SuspendFor(Duration timeout) noexcept { return SuspendTaskFor(this, timeout); }
 
         // ISuspendCallback: the timeout claims the task the same way a resumer does, so exactly one
         // of them gets it.
-        bool OnTimeout(SuspendedTask suspendedTask) noexcept override
+        bool OnWithdraw(SuspendedTask suspendedTask) noexcept override
         {
             return suspendedTask_.compare_exchange_strong(suspendedTask, nullptr, std::memory_order_acq_rel, std::memory_order_acquire);
         }

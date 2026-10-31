@@ -127,6 +127,78 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
             ConvertTaskToThread();
         }
 
+        TEST_METHOD(TestRecvEndsOnCancel)
+        {
+            ConvertThreadToTask();
+            {
+                WinsockScope winsock;
+                Assert::IsTrue(winsock.ok, L"WSAStartup failed");
+                Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
+
+                {
+                    // no timers: a Recv without a limit ends on a cancel of its task
+                    ScopedScheduler scheduler(SchedulerInfo{.numberOfThreads = 2});
+                    scheduler.Start();
+
+                    AsyncIo::AsyncTcpSocket4 listener;
+                    Assert::IsTrue(Windows::WinsockError::Succeeded(listener.Create()), L"Listener Create failed");
+                    sockaddr_in bindAddr = MakeLoopbackAddress(0);
+                    Assert::IsTrue(Windows::WinsockError::Succeeded(listener.Bind(bindAddr)), L"Listener Bind failed");
+                    Assert::IsTrue(Windows::WinsockError::Succeeded(listener.Listen()), L"Listener Listen failed");
+                    sockaddr_in boundAddr{};
+                    Assert::IsTrue(Windows::WinsockError::Succeeded(listener.GetSockName(boundAddr)), L"GetSockName failed");
+                    const short port = ntohs(boundAddr.sin_port);
+
+                    std::atomic<int>   recvError{-1};
+                    std::atomic<DWORD> recvBytes{12345};
+                    std::atomic<bool>  receiving{false};
+                    std::atomic<bool>  serverDone{false};
+                    std::atomic<bool>  clientDone{false};
+
+                    // The server waits for data that never comes, until it is cancelled.
+                    ActionTask server([&]() {
+                        AsyncIo::AsyncTcpSocket4 connection;
+                        if (Windows::WinsockError::Failed(listener.Accept(connection))) {
+                            serverDone.store(true);
+                            return;
+                        }
+
+                        char  buffer[64];
+                        DWORD received = 0;
+                        receiving.store(true);
+                        recvError.store(connection.Recv(buffer, sizeof(buffer), &received));
+                        recvBytes.store(received);
+                        serverDone.store(true);
+                    });
+
+                    // The client connects and stays silent until the server is done.
+                    ActionTask client([&]() {
+                        AsyncIo::AsyncTcpSocket4 socket;
+                        sockaddr_in              anyAddr    = MakeAnyAddress();
+                        sockaddr_in              serverAddr = MakeLoopbackAddress(port);
+                        if (Windows::WinsockError::Succeeded(socket.Create()) && Windows::WinsockError::Succeeded(socket.Bind(anyAddr))
+                            && Windows::WinsockError::Succeeded(socket.Connect(serverAddr)))
+                            YieldWaitFor([&]() { return serverDone.load(); });
+                        clientDone.store(true);
+                    });
+
+                    scheduler.AddTask(&server, TaskPriority::Normal);
+                    scheduler.AddTask(&client, TaskPriority::Normal);
+
+                    Assert::IsTrue(WaitFor([&]() { return receiving.load() || serverDone.load(); }), L"the server did not get to its Recv");
+                    Sleep(20); // let it suspend
+                    Assert::IsTrue(server.Cancel(), L"Cancel failed");
+
+                    Assert::IsTrue(WaitFor([&]() { return serverDone.load() && clientDone.load(); }), L"server or client did not finish");
+                    Assert::AreEqual(static_cast<int>(WSA_OPERATION_ABORTED), recvError.load(), L"a cancelled Recv must be aborted");
+                    Assert::AreEqual(DWORD{0}, recvBytes.load(), L"a cancelled Recv receives nothing");
+                }
+
+                AsyncIo::DisableAsyncIo();
+            }
+            ConvertTaskToThread();
+        }
+
         TEST_METHOD(TestTcpLoopbackEcho)
         {
             for (DWORD numThreads : GetMultiThreadTestCounts()) {

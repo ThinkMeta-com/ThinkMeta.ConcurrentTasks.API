@@ -74,7 +74,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <param name="address">Optional; receives the peer's address.</param>
         /// <param name="timeout">Limit for the wait; see <see cref="AsyncSocket"/> for the timeout rules.</param>
         /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/>, or the WSA error of the
+        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/>, <see cref="WinsockError::OperationAborted"/> (task
+        /// cancelled), or the WSA error of the
         /// create/<c>AcceptEx</c>/<c>setsockopt</c> step.
         /// </returns>
         /// <remarks>
@@ -139,7 +140,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <param name="address">The remote address and port (<c>sockaddr_in</c> or <c>sockaddr_in6</c>).</param>
         /// <param name="timeout">Limit for the wait; see <see cref="AsyncSocket"/> for the timeout rules.</param>
         /// <returns>
-        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/>, or the WSA error of
+        /// <see cref="WinsockError::Success"/>, <see cref="WinsockError::TimedOut"/>, <see cref="WinsockError::OperationAborted"/> (task
+        /// cancelled), or the WSA error of
         /// <c>ConnectEx</c>/<c>setsockopt</c>.
         /// </returns>
         /// <remarks>

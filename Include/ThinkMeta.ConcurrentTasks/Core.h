@@ -125,13 +125,26 @@ namespace ThinkMeta::ConcurrentTasks {
     /// <summary>Handle of a suspended task: the only kind of handle <see cref="ResumeTask"/> takes.</summary>
     /// <remarks>
     /// Handed out by <see cref="ISuspendCallback::OnSuspended"/> (and
-    /// <see cref="ISuspendCallback::OnTimeout"/>); valid for exactly one <see cref="ResumeTask"/>. It
+    /// <see cref="ISuspendCallback::OnWithdraw"/>); valid for exactly one <see cref="ResumeTask"/>. It
     /// converts to a <see cref="TaskHandle"/>, but a TaskHandle - for example the calling task's own
     /// - does not convert to it, so a running task cannot be resumed by mistake.
     /// </remarks>
     /// <seealso cref="SuspendTask"/>
     /// <seealso cref="ResumeTask"/>
     using SuspendedTask = SuspendedTaskEntry*;
+
+    /// <summary>Tells how a wait ended.</summary>
+    /// <seealso cref="SuspendTaskFor"/>
+    enum class WaitStatus : int {
+        /// <summary>A <see cref="ResumeTask"/> ended the wait: the condition came true.</summary>
+        Signaled,
+
+        /// <summary>The timeout struck first.</summary>
+        TimedOut,
+
+        /// <summary>The task was asked to cancel (<see cref="CancelTask"/>).</summary>
+        Cancelled
+    };
 
     /// <summary>Selects how <see cref="YieldTask"/> gives up the processor.</summary>
     /// <remarks>
@@ -221,24 +234,28 @@ namespace ThinkMeta::ConcurrentTasks {
         /// published a resumer on another thread may resume the task, so the callback must not
         /// touch the waiter's state after publishing unless it knows the task cannot run yet.
         /// </remarks>
-        /// <seealso cref="OnTimeout"/>
+        /// <seealso cref="OnWithdraw"/>
         virtual void OnSuspended(SuspendedTask suspendedTask) noexcept = 0;
 
-        /// <summary>Called when a <see cref="SuspendTaskFor"/> times out.</summary>
+        /// <summary>Asks the waiter to take a suspended task back, so the core can end its wait early.</summary>
         /// <param name="suspendedTask">
         /// The handle <see cref="OnSuspended"/> received for this suspension; the waiter removes it from
         /// where it was published if it is still there.
         /// </param>
         /// <returns>
         /// <c>true</c> if the waiter took the task back from wherever <see cref="OnSuspended"/>
-        /// published it: the core then resumes it as timed out. <c>false</c> if a resumer took the
-        /// task first; the core then waits for that resumer's <see cref="ResumeTask"/>.
+        /// published it: the core then resumes it with the reason it ended the wait for. <c>false</c>
+        /// if a resumer took the task first; the core then waits for that resumer's
+        /// <see cref="ResumeTask"/>.
         /// </returns>
         /// <remarks>
-        /// Called by the core's timer thread while the task is still suspended. Must be short and
-        /// must not resume the task itself.
+        /// Called while the task is still suspended, when a <see cref="SuspendTaskFor"/> times out
+        /// (on the core's timer thread) or its task is cancelled (on the thread that calls
+        /// <see cref="CancelTask"/>, or on a scheduler thread). Must be short, must not resume the
+        /// task itself and must not cancel a task. The default, <c>false</c>, makes a wait neither time
+        /// out nor end on a cancel.
         /// </remarks>
-        virtual bool OnTimeout([[maybe_unused]] SuspendedTask suspendedTask) noexcept
+        virtual bool OnWithdraw([[maybe_unused]] SuspendedTask suspendedTask) noexcept
         {
             return false;
         }
@@ -248,9 +265,9 @@ namespace ThinkMeta::ConcurrentTasks {
     struct CT_NOVTABLE INotifyTaskStateChange {
         /// <summary>Called by the core once the task has exited.</summary>
         /// <remarks>
-        /// A task exits when its <see cref="ITask::Run"/> has returned, or when a task added by
-        /// <see cref="ITaskScheduler::AddTimedTask"/> exits without running
-        /// (<see cref="CancelTimedTask"/>, <see cref="DisableTimers"/>).
+        /// A task exits when its <see cref="ITask::Run"/> has returned, or when it exits without
+        /// running: cancelled before it started (<see cref="CancelTask"/>), or added by
+        /// <see cref="ITaskScheduler::AddTimedTask"/> while timers stop (<see cref="DisableTimers"/>).
         /// Called on a scheduler thread of the task's scheduler, from the fiber that ran the task;
         /// the core no longer touches the task object afterwards, so this is the earliest point at
         /// which the object may be destroyed or added again. Must not throw.
@@ -259,15 +276,15 @@ namespace ThinkMeta::ConcurrentTasks {
         virtual void OnTaskExited() noexcept = 0;
     };
 
-    /// <summary>Storage the core uses for timers.</summary>
+    /// <summary>Storage the core keeps per task to control its start and its waits.</summary>
     /// <remarks>
     /// Lives inside a task object to start the task later
     /// (<see cref="ITaskScheduler::AddTimedTask"/>), and in every task context for
     /// <see cref="SleepTask"/> and <see cref="SuspendTaskFor"/>. Opaque; zero-initialized it means
-    /// "not timed".
+    /// "idle".
     /// </remarks>
-    /// <seealso cref="ITask::GetTimerData"/>
-    struct TaskTimerData {
+    /// <seealso cref="ITask::GetControlData"/>
+    struct TaskControlData {
         void* reserved[16];
     };
 
@@ -298,10 +315,10 @@ namespace ThinkMeta::ConcurrentTasks {
         /// <seealso cref="INotifyTaskStateChange::OnTaskExited"/>
         virtual void SetNotifyCallback(INotifyTaskStateChange* notifyTaskStateChange) noexcept = 0;
 
-        /// <summary>Returns the task's timer storage.</summary>
+        /// <summary>Returns the task's control data.</summary>
         /// <returns>
         /// Storage owned by the task object and valid as long as it lives, or <c>nullptr</c> (the
-        /// default) if the task cannot be started by time.
+        /// default) if the task brings none and so cannot be started by time.
         /// </returns>
         /// <remarks>
         /// Needed only to start the task by time (<see cref="ITaskScheduler::AddTimedTask"/>): a task
@@ -309,8 +326,8 @@ namespace ThinkMeta::ConcurrentTasks {
         /// without state, say - cannot be started by time; it can still sleep and wait with a
         /// timeout.
         /// </remarks>
-        /// <seealso cref="TaskTimerData"/>
-        virtual TaskTimerData* GetTimerData() noexcept { return nullptr; }
+        /// <seealso cref="TaskControlData"/>
+        virtual TaskControlData* GetControlData() noexcept { return nullptr; }
     };
 
     /// <summary>Decides when a <see cref="SchedulerKind::TaskSwap"/> scheduler switches tasks.</summary>
@@ -420,7 +437,7 @@ namespace ThinkMeta::ConcurrentTasks {
 
         /// <summary>Adds a task after a delay.</summary>
         /// <param name="task">
-        /// The task to start; it must return storage from <see cref="ITask::GetTimerData"/>. Owned by the
+        /// The task to start; it must return storage from <see cref="ITask::GetControlData"/>. Owned by the
         /// caller and must stay valid until its <see cref="INotifyTaskStateChange::OnTaskExited"/> has
         /// been called.
         /// </param>
@@ -431,14 +448,14 @@ namespace ThinkMeta::ConcurrentTasks {
         /// <param name="delay">Time from now until the task is queued, as a <see cref="Duration"/>.</param>
         /// <returns>
         /// <c>true</c> if the task is waiting to start; <c>false</c> if timers are not enabled, the task has no
-        /// <see cref="ITask::GetTimerData"/>, it is being cancelled, or the scheduler cannot start
+        /// <see cref="ITask::GetControlData"/>, it is being cancelled, or the scheduler cannot start
         /// tasks by time (<see cref="SchedulerKind::TaskSwap"/>).
         /// </returns>
         /// <remarks>
         /// Needs <see cref="EnableTimers"/>. Called again before the task has started, it moves the
         /// start. Like <see cref="AddTask"/>, a task may be added again only once it has exited.
         /// </remarks>
-        /// <seealso cref="CancelTimedTask"/>
+        /// <seealso cref="CancelTask"/>
         /// <seealso cref="ScheduleTimedTask"/>
         virtual bool AddTimedTask(ITask* task, TaskPriority priority, Duration delay) noexcept = 0;
     };
@@ -656,6 +673,39 @@ namespace ThinkMeta::ConcurrentTasks {
     /// </remarks>
     CT_CORE void ConvertTaskToThread() noexcept;
 
+    // --- cancellation ---
+
+    /// <summary>Asks a task to cancel.</summary>
+    /// <param name="task">The task; it must return storage from <see cref="ITask::GetControlData"/>.</param>
+    /// <returns>
+    /// <c>true</c> if the request is new; <c>false</c> if the task was asked already or has no
+    /// <see cref="ITask::GetControlData"/>.
+    /// </returns>
+    /// <remarks>
+    /// Cooperative: a running task is never stopped from outside; it sees the request through
+    /// <see cref="IsCancellationRequested"/> and ends itself. A task that has not started yet - added,
+    /// or waiting to start by time - exits without running
+    /// (<see cref="INotifyTaskStateChange::OnTaskExited"/>). A <see cref="SleepTask"/> ends early, and
+    /// a <see cref="SuspendTaskFor"/> ends with <see cref="WaitStatus::Cancelled"/> if its
+    /// <see cref="ISuspendCallback::OnWithdraw"/> takes the task back; a later one returns at once.
+    /// The request stays until the task has exited; asked while the task is not added at all, it
+    /// applies to the next run, which then exits without running. Asked again for a standing
+    /// request, it acts again, e.g. on a start by time added since, and returns <c>false</c>.
+    /// Callable from any task or thread, but not from <see cref="ISuspendCallback::OnWithdraw"/>;
+    /// the task object must stay valid during the call. Never blocks.
+    /// </remarks>
+    /// <seealso cref="IsCancellationRequested"/>
+    CT_CORE bool CancelTask(ITask* task) noexcept;
+
+    /// <summary>Returns whether the calling task is asked to cancel.</summary>
+    /// <returns>
+    /// <c>true</c> after a <see cref="CancelTask"/> for the calling task; <c>false</c> otherwise, also
+    /// outside a task and in a task without <see cref="ITask::GetControlData"/>.
+    /// </returns>
+    /// <remarks>Cheap enough to ask in a loop.</remarks>
+    /// <seealso cref="CancelTask"/>
+    CT_CORE bool IsCancellationRequested() noexcept;
+
     // --- tasks by time ---
 
     /// <summary>Starts the core's timer thread.</summary>
@@ -680,54 +730,48 @@ namespace ThinkMeta::ConcurrentTasks {
 
     /// <summary>Suspends the calling task for a while.</summary>
     /// <param name="duration">Minimum time to sleep, as a <see cref="Duration"/>.</param>
-    /// <returns><c>true</c> after the sleep; <c>false</c> at once if timers are not enabled.</returns>
+    /// <returns>
+    /// <c>true</c> after the sleep; <c>false</c> at once if timers are not enabled, and early if the
+    /// task is cancelled (<see cref="CancelTask"/>).
+    /// </returns>
     /// <remarks>
-    /// Its thread runs other tasks meanwhile. Nothing cuts the sleep short; to wait for something
-    /// with a time limit, wait on it with a timeout.
+    /// Its thread runs other tasks meanwhile. Only a cancel cuts the sleep short; to wait for
+    /// something with a time limit, wait on it with a timeout.
     /// </remarks>
     /// <seealso cref="EnableTimers"/>
     CT_CORE bool SleepTask(Duration duration) noexcept;
 
-    /// <summary>Suspends the calling task with a timeout.</summary>
+    /// <summary>Suspends the calling task with a timeout; the wait also ends when the task is cancelled.</summary>
     /// <param name="callback">
-    /// Receives the task's handle (<see cref="ISuspendCallback::OnSuspended"/>) and, on timeout, the
-    /// <see cref="ISuspendCallback::OnTimeout"/> call; required, and must stay valid until this call returns.
+    /// Receives the task's handle (<see cref="ISuspendCallback::OnSuspended"/>) and, on timeout or
+    /// cancel, the <see cref="ISuspendCallback::OnWithdraw"/> call; required, and must stay valid
+    /// until this call returns.
     /// </param>
     /// <param name="timeout">
     /// Longest time to stay suspended; <see cref="Duration::Infinite"/> waits without a timeout.
     /// </param>
     /// <returns>
-    /// <c>true</c> if a <see cref="ResumeTask"/> ended the wait, <c>false</c> if it timed out:
-    /// then the core has called <see cref="ISuspendCallback::OnTimeout"/> on
-    /// <paramref name="callback"/>, which took the task back from where
-    /// <see cref="ISuspendCallback::OnSuspended"/> had published it.
+    /// <see cref="WaitStatus::Signaled"/> if a <see cref="ResumeTask"/> ended the wait;
+    /// <see cref="WaitStatus::TimedOut"/> or <see cref="WaitStatus::Cancelled"/> if the core ended
+    /// it: then <see cref="ISuspendCallback::OnWithdraw"/> on <paramref name="callback"/> took the
+    /// task back from where <see cref="ISuspendCallback::OnSuspended"/> had published it.
+    /// <see cref="WaitStatus::Cancelled"/> at once, without suspending, if the task was asked to
+    /// cancel before.
     /// </returns>
     /// <remarks>
     /// Like <see cref="SuspendTask"/>, but the wait ends after <paramref name="timeout"/> at the
-    /// latest. The waiter's state (the callback) is never touched again once the task runs.
+    /// latest, or on <see cref="CancelTask"/> for a task with <see cref="ITask::GetControlData"/>.
+    /// The waiter's state (the callback) is never touched again once the task runs.
     /// Without <see cref="EnableTimers"/>, or with <see cref="Duration::Infinite"/>, it waits
     /// without a timeout.
     /// </remarks>
-    CT_CORE bool SuspendTaskFor(ISuspendCallback* callback, Duration timeout) noexcept;
-
-    /// <summary>Takes back a timed task that has not started yet.</summary>
-    /// <param name="task">A task added by <see cref="ITaskScheduler::AddTimedTask"/>.</param>
-    /// <returns>
-    /// Whether the task was waiting to start; <c>false</c> if it had started or was not timed.
-    /// </returns>
-    /// <remarks>
-    /// The task (added by <see cref="ITaskScheduler::AddTimedTask"/>) exits without running, so
-    /// its <see cref="INotifyTaskStateChange::OnTaskExited"/> is called (on its scheduler) and
-    /// only then may the task object go away or be added again. Never blocks.
-    /// </remarks>
-    /// <seealso cref="ScheduleTimedTask"/>
-    CT_CORE bool CancelTimedTask(ITask* task) noexcept;
+    CT_CORE WaitStatus SuspendTaskFor(ISuspendCallback* callback, Duration timeout) noexcept;
 
     /// <summary>Starts a timed task now instead of later.</summary>
     /// <param name="task">A task added by <see cref="ITaskScheduler::AddTimedTask"/>.</param>
     /// <returns><c>true</c> if the task was queued now; <c>false</c> if it was not waiting to start.</returns>
-    /// <remarks>Never blocks.</remarks>
-    /// <seealso cref="CancelTimedTask"/>
+    /// <remarks>Never blocks. To take the start back, cancel the task (<see cref="CancelTask"/>).</remarks>
+    /// <seealso cref="CancelTask"/>
     CT_CORE bool ScheduleTimedTask(ITask* task) noexcept;
     }
 

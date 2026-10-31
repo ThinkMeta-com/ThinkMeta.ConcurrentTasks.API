@@ -1,7 +1,7 @@
 //
 // Copyright (c) 2026 ThinkMeta Software GmbH
 //
-// Task: the library's base class for tasks (an ITask with timer storage and an exit
+// Task: the library's base class for tasks (an ITask with control data and an exit
 // notification), and LambdaTask, a Task that runs a callable. Task::Create builds one.
 //
 // Preliminary API: everything in this file is subject to change.
@@ -69,10 +69,10 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
         /// </remarks>
         void SetNotifyCallback(INotifyTaskStateChange* notifyTaskStateChange) noexcept override { notifyTaskStateChange_ = notifyTaskStateChange; }
 
-        /// <summary>Returns the task's own timer storage.</summary>
+        /// <summary>Returns the task's own control data.</summary>
         /// <returns>Storage inside this object; never <c>nullptr</c>.</returns>
         /// <remarks>So <see cref="Task"/> objects can be started by time.</remarks>
-        TaskTimerData* GetTimerData() noexcept override { return &timerData_; }
+        TaskControlData* GetControlData() noexcept override { return &control_; }
 
         /// <summary>Adds the task to the calling task's scheduler.</summary>
         /// <param name="taskPriority">
@@ -83,7 +83,7 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
         /// Uses <see cref="ITaskScheduler::AddTask"/>. Call it from a task running on a scheduler;
         /// from a plain or converted thread call AddTask on the scheduler object instead.
         /// </remarks>
-        /// <seealso cref="CancelSchedule"/>
+        /// <seealso cref="Cancel"/>
         void Schedule(TaskPriority taskPriority = TaskPriority::Default) noexcept { GetTaskScheduler()->AddTask(this, taskPriority); }
 
         /// <summary>Adds the task to the given scheduler.</summary>
@@ -122,20 +122,18 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
         /// unless you start it without delay (<see cref="Schedule"/> with the priority only) or report its
         /// exit yourself by calling its <see cref="OnTaskExited"/>, which counts it out of the group.
         /// </remarks>
-        /// <seealso cref="CancelSchedule"/>
+        /// <seealso cref="Cancel"/>
         /// <seealso cref="ScheduleNow"/>
         bool Schedule(TaskPriority taskPriority, Duration delay) noexcept { return GetTaskScheduler()->AddTimedTask(this, taskPriority, delay); }
 
-        /// <summary>Takes back a start by time that has not happened yet.</summary>
-        /// <returns>
-        /// <c>true</c> if the start was taken back; <c>false</c> if the task had started already or was
-        /// not started by time.
-        /// </returns>
+        /// <summary>Asks the task to cancel.</summary>
+        /// <returns><c>true</c> if the request is new; <c>false</c> if the task was asked already.</returns>
         /// <remarks>
-        /// The task exits without running (<see cref="OnTaskExited"/>). Never blocks.
+        /// A task that has not started yet, also one waiting to start by time, exits without running
+        /// (<see cref="OnTaskExited"/>); a running one sees the request and ends itself. Never blocks.
         /// </remarks>
-        /// <seealso cref="CancelTimedTask"/>
-        bool CancelSchedule() noexcept { return CancelTimedTask(this); }
+        /// <seealso cref="CancelTask"/>
+        bool Cancel() noexcept { return CancelTask(this); }
 
         /// <summary>Starts a task scheduled by time now instead of later.</summary>
         /// <returns><c>true</c> if the task was queued now; <c>false</c> if it was not waiting to start.</returns>
@@ -189,7 +187,7 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
 
     private:
         INotifyTaskStateChange* notifyTaskStateChange_;
-        TaskTimerData           timerData_{};
+        TaskControlData         control_{};
     };
 
     /// <summary>A <see cref="Task"/> that runs a stored callable.</summary>

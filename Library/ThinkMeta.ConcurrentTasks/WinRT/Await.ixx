@@ -15,7 +15,7 @@ module;
 
 export module ThinkMeta.ConcurrentTasks.WinRT.Await;
 
-import ThinkMeta.ConcurrentTasks.Synchronization.ManualResetEvent;
+import ThinkMeta.ConcurrentTasks.Synchronization.Await;
 
 namespace ThinkMeta::ConcurrentTasks::WinRT {
     /// <summary>Matches the C++/WinRT asynchronous operation types.</summary>
@@ -56,13 +56,10 @@ namespace ThinkMeta::ConcurrentTasks::WinRT {
     export template <AsyncOperationType AsyncOp>
     auto Await(const AsyncOp& op)
     {
-        // AsyncStatus::Started is 0; every other status means the operation has finished.
-        if (op.Status() == decltype(op.Status()){}) {
-            // Set is the last access to the event, so it may live on the task's stack. An operation
-            // that completes meanwhile calls the handler at once, and Wait passes.
-            Synchronization::ManualResetEvent_s completed;
-            op.Completed([&completed](auto&&, auto&&) noexcept { completed.Set(); });
-            completed.Wait();
+        constexpr auto started = decltype(op.Status()){}; // AsyncStatus::Started; every other status means finished
+        if (op.Status() == started) {
+            // An operation that completes meanwhile calls the handler at once, and the wait passes.
+            Synchronization::Await([&op](Synchronization::Completion completion) { op.Completed([completion](auto&&, auto&&) noexcept { completion(); }); });
         }
 
         return op.GetResults();

@@ -112,7 +112,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     class _ManualResetEvent<SuspensionKind::Single> : private ISuspendCallback
     {
         // State and waiter share one word, so that the operation that lets the waiter pass is the
-        // last access to the event - by Set, by OnSuspended and by OnTimeout alike. The I/O
+        // last access to the event - by Set, by OnSuspended and by OnWithdraw alike. The I/O
         // requests on a task's stack rely on this.
 
     public:
@@ -158,7 +158,9 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         /// <summary>Waits until the event is set.</summary>
         /// <remarks>
         /// Returns at once if the event is set, otherwise suspends the calling task until
-        /// <see cref="Set"/>. Task or converted thread only; at most one waiter at a time.
+        /// <see cref="Set"/>. Task or converted thread only; at most one waiter at a time. A
+        /// <see cref="CancelTask"/> does not end it; <see cref="Wait(Duration)"/> with
+        /// <see cref="Duration::Infinite"/> waits until either.
         /// </remarks>
         /// <seealso cref="TryWait"/>
         void Wait() noexcept
@@ -169,16 +171,18 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
 
         /// <summary>Waits until the event is set, with a time limit.</summary>
         /// <param name="timeout">
-        /// The longest time to wait. Needs <see cref="EnableTimers"/>; without it the wait has no
-        /// limit.
+        /// The longest time to wait. Needs <see cref="EnableTimers"/>; without it, or with
+        /// <see cref="Duration::Infinite"/>, the wait has no limit.
         /// </param>
         /// <returns>
-        /// <c>true</c> if the event is set; <c>false</c> if it timed out: the task no longer waits on
-        /// the event; the event may be set later.
+        /// <see cref="WaitStatus::Signaled"/> if the event is set; <see cref="WaitStatus::TimedOut"/> if
+        /// it timed out; <see cref="WaitStatus::Cancelled"/> if the task was cancelled
+        /// (<see cref="CancelTask"/>). Unless signaled, the task no longer waits on the event; the
+        /// event may be set later.
         /// </returns>
         /// <remarks>Task or converted thread only.</remarks>
         /// <seealso cref="TryWait"/>
-        [[nodiscard]] bool Wait(Duration timeout) noexcept { return TryWait() || SuspendTaskFor(this, timeout); }
+        [[nodiscard]] WaitStatus Wait(Duration timeout) noexcept { return TryWait() ? WaitStatus::Signaled : SuspendTaskFor(this, timeout); }
 
     private:
         // ISuspendCallback: publishing and checking are one compare-exchange; when it succeeds, it is
@@ -194,7 +198,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
 
         // ISuspendCallback: the timeout and Set race for the waiter in the word; whoever takes it out
         // resumes it (while this runs, the core keeps a concurrent resume pending).
-        bool OnTimeout(SuspendedTask suspendedTask) noexcept override
+        bool OnWithdraw(SuspendedTask suspendedTask) noexcept override
         {
             auto expected = FromTask(suspendedTask);
             return state_.compare_exchange_strong(expected, ResetState, std::memory_order_acq_rel, std::memory_order_acquire);

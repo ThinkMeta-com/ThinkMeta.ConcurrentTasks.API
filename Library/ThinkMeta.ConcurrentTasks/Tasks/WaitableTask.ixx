@@ -53,7 +53,10 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
     {
     public:
         /// <summary>Suspends the calling task until this task has exited.</summary>
-        /// <remarks>Returns at once if it has exited already.</remarks>
+        /// <remarks>
+        /// Returns at once if it has exited already. A <see cref="CancelTask"/> of the waiting task
+        /// does not end it.
+        /// </remarks>
         /// <seealso cref="TryWait"/>
         void Wait() noexcept { event_.Wait(); }
 
@@ -62,10 +65,14 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
         /// Longest time to wait, as a <see cref="Duration"/>; <see cref="Duration::Infinite"/> waits without
         /// a timeout.
         /// </param>
-        /// <returns><c>true</c> if the task has exited; <c>false</c> if the wait timed out.</returns>
+        /// <returns>
+        /// <see cref="WaitStatus::Signaled"/> if the task has exited; <see cref="WaitStatus::TimedOut"/>
+        /// if the wait timed out; <see cref="WaitStatus::Cancelled"/> if the waiting task was
+        /// cancelled (<see cref="CancelTask"/>).
+        /// </returns>
         /// <remarks><see cref="WaitableTask_s"/> only.</remarks>
         /// <seealso cref="TryWait"/>
-        [[nodiscard]] bool Wait(Duration timeout) noexcept
+        [[nodiscard]] WaitStatus Wait(Duration timeout) noexcept
             requires(_SuspensionKind == SuspensionKind::Single)
         {
             return event_.Wait(timeout);

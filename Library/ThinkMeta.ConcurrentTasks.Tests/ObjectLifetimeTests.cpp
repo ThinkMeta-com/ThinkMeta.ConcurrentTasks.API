@@ -105,7 +105,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
             using Event = Synchronization::ManualResetEvent_s;
             RunLifetimeRounds<Event>(NoPreparation, [](Event& event) { event.Set(); },
                                      [](Event& event, int round) {
-                                         if (!event.Wait(Duration::Microseconds(round % 50)))
+                                         if (event.Wait(Duration::Microseconds(round % 50)) != WaitStatus::Signaled)
                                              event.Wait();
                                      });
             DisableTimers();
@@ -139,7 +139,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
             using Event = Synchronization::AutoResetEvent_s;
             RunLifetimeRounds<Event>(NoPreparation, [](Event& event) { event.Set(); },
                                      [](Event& event, int round) {
-                                         if (!event.Wait(Duration::Microseconds(round % 50)))
+                                         if (event.Wait(Duration::Microseconds(round % 50)) != WaitStatus::Signaled)
                                              event.Wait();
                                      });
             DisableTimers();

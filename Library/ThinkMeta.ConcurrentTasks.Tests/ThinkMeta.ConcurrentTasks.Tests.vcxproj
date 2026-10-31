@@ -31,8 +31,8 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(VCInstallDir)UnitTest\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <!-- C++/WinRT (WinRTAwaitTests) -->
-      <AdditionalDependencies>windowsapp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- C++/WinRT (WinRTAwaitTests), Media Foundation (AwaitTests) -->
+      <AdditionalDependencies>windowsapp.lib;mfplat.lib;mfuuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -55,6 +55,7 @@
     <ClCompile Include="WaitableLambdaTaskTests.cpp" />
     <ClCompile Include="SpscVirtualMemoryPipeTests.cpp" />
     <ClCompile Include="CrashDump.cpp" />
+    <ClCompile Include="AwaitTests.cpp" />
     <ClCompile Include="WinRTAwaitTests.cpp" />
   </ItemGroup>
   <ItemGroup>

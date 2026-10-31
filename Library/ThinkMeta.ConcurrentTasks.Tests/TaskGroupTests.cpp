@@ -151,7 +151,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                         for (auto& task : tasks)
                             GetTaskScheduler()->AddTask(task.get(), TaskPriority::Normal);
                         if constexpr (Timed) {
-                            if (!group.Wait(Duration::Seconds(60)))
+                            if (group.Wait(Duration::Seconds(60)) != WaitStatus::Signaled)
                                 passedEarly.store(true, std::memory_order_release);
                         } else
                             group.Wait();

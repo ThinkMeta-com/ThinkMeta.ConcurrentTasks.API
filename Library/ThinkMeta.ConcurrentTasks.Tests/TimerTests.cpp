@@ -151,14 +151,14 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                     later.Schedule(TaskPriority::Normal, Duration::Milliseconds(30));
                     cancelled.Schedule(TaskPriority::Normal, Duration::Seconds(60));
                     now.Schedule(TaskPriority::Normal, Duration::Seconds(60));
-                    cancelResult.store(cancelled.CancelSchedule());
+                    cancelResult.store(cancelled.Cancel());
                     nowResult.store(now.ScheduleNow());
                     scheduled.store(true);
                 });
                 scheduler.AddTask(&planner, TaskPriority::Normal);
 
                 Assert::IsTrue(WaitFor([&]() { return scheduled.load(); }), L"the planning task did not run");
-                Assert::IsTrue(cancelResult.load(), L"CancelSchedule failed");
+                Assert::IsTrue(cancelResult.load(), L"Cancel failed");
                 Assert::IsTrue(nowResult.load(), L"ScheduleNow failed");
 
                 Assert::IsTrue(WaitFor([&]() { return laterExits.exits.load() == 1 && cancelledExits.exits.load() == 1 && nowExits.exits.load() == 1; }),
@@ -189,16 +189,16 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 ActionTask waiter([&]() {
                     // nobody sets the event: the wait times out
                     const auto start = std::chrono::steady_clock::now();
-                    eventTimedOut.store(event.Wait(Duration::Milliseconds(30)) ? 1 : 0);
+                    eventTimedOut.store(static_cast<int>(event.Wait(Duration::Milliseconds(30))));
                     eventWaited.store(MillisecondsSince(start));
 
                     // now the test sets it while the task waits
                     waiting.store(true);
-                    eventSignaled.store(event.Wait(Duration::Seconds(10)) ? 1 : 0);
+                    eventSignaled.store(static_cast<int>(event.Wait(Duration::Seconds(10))));
 
-                    semaphoreTimedOut.store(semaphore.Wait(Duration::Milliseconds(10)) ? 1 : 0);
+                    semaphoreTimedOut.store(static_cast<int>(semaphore.Wait(Duration::Milliseconds(10))));
                     semaphore.Release();
-                    semaphoreSignaled.store(semaphore.Wait(Duration::Seconds(10)) ? 1 : 0);
+                    semaphoreSignaled.store(static_cast<int>(semaphore.Wait(Duration::Seconds(10))));
                 });
                 scheduler.AddTask(&waiter, TaskPriority::Normal);
 
@@ -207,11 +207,11 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 event.Set();
 
                 Assert::IsTrue(WaitFor([&]() { return semaphoreSignaled.load() != -1; }), L"the waiting task did not finish");
-                Assert::AreEqual(0, eventTimedOut.load(), L"an event nobody sets must time out");
+                Assert::AreEqual(static_cast<int>(WaitStatus::TimedOut), eventTimedOut.load(), L"an event nobody sets must time out");
                 Assert::IsTrue(eventWaited.load() >= 30.0, L"the event wait timed out early");
-                Assert::AreEqual(1, eventSignaled.load(), L"a set event must end the wait");
-                Assert::AreEqual(0, semaphoreTimedOut.load(), L"a semaphore without count must time out");
-                Assert::AreEqual(1, semaphoreSignaled.load(), L"a released semaphore must end the wait");
+                Assert::AreEqual(static_cast<int>(WaitStatus::Signaled), eventSignaled.load(), L"a set event must end the wait");
+                Assert::AreEqual(static_cast<int>(WaitStatus::TimedOut), semaphoreTimedOut.load(), L"a semaphore without count must time out");
+                Assert::AreEqual(static_cast<int>(WaitStatus::Signaled), semaphoreSignaled.load(), L"a released semaphore must end the wait");
             }
             ConvertTaskToThread();
         }
@@ -238,17 +238,64 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 std::atomic<int> firstWait{-1}, secondWait{-1};
 
                 ActionTask waiter([&]() {
-                    firstWait.store(slow.Wait(Duration::Milliseconds(20)) ? 1 : 0); // still running
+                    firstWait.store(static_cast<int>(slow.Wait(Duration::Milliseconds(20)))); // still running
                     slow.release.store(true);
-                    secondWait.store(slow.Wait(Duration::Seconds(10)) ? 1 : 0);
+                    secondWait.store(static_cast<int>(slow.Wait(Duration::Seconds(10))));
                 });
 
                 scheduler.AddTask(&slow, TaskPriority::Normal);
                 scheduler.AddTask(&waiter, TaskPriority::Normal);
 
                 Assert::IsTrue(WaitFor([&]() { return secondWait.load() != -1; }), L"the waiting task did not finish");
-                Assert::AreEqual(0, firstWait.load(), L"waiting for a running task must time out");
-                Assert::AreEqual(1, secondWait.load(), L"waiting for a task that exits must succeed");
+                Assert::AreEqual(static_cast<int>(WaitStatus::TimedOut), firstWait.load(), L"waiting for a running task must time out");
+                Assert::AreEqual(static_cast<int>(WaitStatus::Signaled), secondWait.load(), L"waiting for a task that exits must succeed");
+            }
+            ConvertTaskToThread();
+        }
+
+        TEST_METHOD(TestCancelEndsAWaitWithoutLimit)
+        {
+            ConvertThreadToTask();
+            {
+                ScopedScheduler scheduler(SchedulerInfo{.numberOfThreads = 2});
+                scheduler.Start();
+                // no timers: a cancel ends a wait without them
+
+                Synchronization::AutoResetEvent_s event;
+                Synchronization::Semaphore_s      semaphore;
+
+                std::atomic<int>  eventWait{-1}, requested{-1}, semaphoreWait{-1}, plainWait{-1};
+                std::atomic<bool> waiting{false};
+
+                ActionTask waiter([&]() {
+                    waiting.store(true);
+                    eventWait.store(static_cast<int>(event.Wait(Duration::Infinite())));
+                    requested.store(IsCancellationRequested() ? 1 : 0);
+
+                    // still asked to cancel: a later wait returns at once and takes no permit
+                    semaphoreWait.store(static_cast<int>(semaphore.Wait(Duration::Infinite())));
+
+                    // Wait() has no cancel: it passes only once the event is set
+                    event.Wait();
+                    plainWait.store(1);
+                });
+                scheduler.AddTask(&waiter, TaskPriority::Normal);
+
+                Assert::IsTrue(WaitFor([&]() { return waiting.load(); }), L"the waiting task did not start");
+                Sleep(20); // let it suspend
+                Assert::IsTrue(waiter.Cancel(), L"Cancel failed");
+
+                Assert::IsTrue(WaitFor([&]() { return semaphoreWait.load() != -1; }), L"the cancelled waits did not end");
+                Sleep(20);
+                Assert::AreEqual(-1, plainWait.load(), L"Wait() must not end on a cancel");
+                event.Set();
+                Assert::IsTrue(WaitFor([&]() { return plainWait.load() == 1; }), L"Wait() did not end on Set");
+
+                semaphore.Release();
+                Assert::IsTrue(semaphore.TryWait(), L"a cancelled wait took the permit");
+                Assert::AreEqual(static_cast<int>(WaitStatus::Cancelled), eventWait.load(), L"a cancelled wait must report Cancelled");
+                Assert::AreEqual(1, requested.load(), L"the cancelled task must see the request");
+                Assert::AreEqual(static_cast<int>(WaitStatus::Cancelled), semaphoreWait.load(), L"a wait after the cancel must report Cancelled");
             }
             ConvertTaskToThread();
         }

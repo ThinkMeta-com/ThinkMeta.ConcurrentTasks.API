@@ -27,7 +27,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 multiple.Schedule(*scheduler.Get());
                 single.Schedule(*scheduler.Get());
                 multiple.Wait();
-                Assert::IsTrue(single.Wait(Duration::Seconds(10)), L"the single-waiter task did not end");
+                Assert::IsTrue(single.Wait(Duration::Seconds(10)) == WaitStatus::Signaled, L"the single-waiter task did not end");
                 Assert::AreEqual(2, runs.load(), L"not both tasks ran");
                 Assert::IsTrue(multiple.TryWait() && single.TryWait(), L"a finished task does not report it");
 

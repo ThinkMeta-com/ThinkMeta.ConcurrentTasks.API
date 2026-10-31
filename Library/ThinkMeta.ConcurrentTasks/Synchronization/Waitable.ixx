@@ -55,7 +55,8 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         /// <remarks>
         /// Returns at once if <typeparamref name="T"/>::TryWait() succeeds, otherwise suspends the
         /// calling task until a resumer lets it pass (and, with WaitRechecks, until TryWait() holds
-        /// after the resume). Task or converted thread only; no timeout.
+        /// after the resume). Task or converted thread only; no timeout, and a
+        /// <see cref="CancelTask"/> does not end it.
         /// </remarks>
         void Wait(this auto& self) noexcept
         {
@@ -68,36 +69,37 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
 
         /// <summary>Waits with a time limit.</summary>
         /// <param name="timeout">
-        /// The longest time to wait. Needs <see cref="EnableTimers"/>; without it the wait has no
-        /// limit.
+        /// The longest time to wait. Needs <see cref="EnableTimers"/>; without it, or with
+        /// <see cref="Duration::Infinite"/>, the wait has no limit.
         /// </param>
         /// <returns>
-        /// <c>true</c> if TryWait succeeded at once or a resumer let the task pass (with
-        /// WaitRechecks: and TryWait() held after the resume); <c>false</c> if it timed out, the
-        /// task then no longer waits on the object.
+        /// <see cref="WaitStatus::Signaled"/> if TryWait succeeded at once or a resumer let the task
+        /// pass (with WaitRechecks: and TryWait() held after the resume);
+        /// <see cref="WaitStatus::TimedOut"/> if it timed out; <see cref="WaitStatus::Cancelled"/> if
+        /// the task was cancelled (<see cref="CancelTask"/>). Unless signaled, the task no longer
+        /// waits on the object.
         /// </returns>
         /// <remarks>Only for the single-waiter (_s) variants. Task or converted thread only.</remarks>
         /// <seealso cref="Duration"/>
-        [[nodiscard]] bool Wait(this auto& self, Duration timeout) noexcept
+        [[nodiscard]] WaitStatus Wait(this auto& self, Duration timeout) noexcept
             requires(_SuspensionKind == SuspensionKind::Single)
         {
+            if (self.TryWait())
+                return WaitStatus::Signaled;
             if constexpr (!Rechecks)
-                return self.TryWait() || self.SuspendFor(timeout);
+                return self.SuspendFor(timeout);
             else {
-                if (self.TryWait())
-                    return true;
-
                 // A resume without the condition waits on for the time that is left.
                 const long long deadline = timeout.IsInfinite() ? 0 : Deadline(timeout);
                 for (;;) {
-                    if (!self.SuspendFor(timeout))
-                        return false;
+                    if (const auto status = self.SuspendFor(timeout); status != WaitStatus::Signaled)
+                        return status;
                     if (self.TryWait())
-                        return true;
+                        return WaitStatus::Signaled;
                     if (!timeout.IsInfinite()) {
                         const long long left = deadline - Now();
                         if (left <= 0)
-                            return false;
+                            return WaitStatus::TimedOut;
                         timeout = Duration{left};
                     }
                 }
@@ -155,6 +157,6 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// <typeparam name="T">The candidate type.</typeparam>
     export template <typename T>
     concept TimedWaitableType = WaitableType<T> && requires(T& w, Duration timeout) {
-        { w.Wait(timeout) } noexcept -> std::same_as<bool>;
+        { w.Wait(timeout) } noexcept -> std::same_as<WaitStatus>;
     };
 } // namespace ThinkMeta::ConcurrentTasks::Synchronization

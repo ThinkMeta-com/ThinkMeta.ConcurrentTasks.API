@@ -211,11 +211,14 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <c>ERROR_SUCCESS</c> if the read completed; <c>ERROR_TIMEOUT</c> if it was cancelled after
-        /// <paramref name="timeout"/>; otherwise the Win32 error code of the read (e.g. <c>ERROR_HANDLE_EOF</c>).
+        /// <paramref name="timeout"/>; <c>ERROR_OPERATION_ABORTED</c> if the task was cancelled
+        /// (<see cref="CancelTask"/>); otherwise the Win32 error code of the read (e.g. <c>ERROR_HANDLE_EOF</c>).
         /// </returns>
         /// <remarks>
         /// Suspends the calling task until the read has completed (also after a timeout, until the
         /// cancellation is through), so <paramref name="buffer"/> may be reused as soon as it returns.
+        /// A <see cref="CancelTask"/> of the calling task cancels a pending read like a timeout, also
+        /// with <see cref="Duration::Infinite"/>.
         /// </remarks>
         /// <seealso cref="ReadAsync"/>
         /// <seealso cref="Write"/>
@@ -234,9 +237,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <returns>
         /// <c>ERROR_SUCCESS</c> if the write completed; <c>ERROR_TIMEOUT</c> if it was cancelled after
-        /// <paramref name="timeout"/>; otherwise the Win32 error code of the write.
+        /// <paramref name="timeout"/>; <c>ERROR_OPERATION_ABORTED</c> if the task was cancelled
+        /// (<see cref="CancelTask"/>); otherwise the Win32 error code of the write.
         /// </returns>
-        /// <remarks>Suspends the calling task until the write has completed, as Read does.</remarks>
+        /// <remarks>Suspends the calling task until the write has completed, and is cancelled, as Read is.</remarks>
         /// <seealso cref="WriteAsync"/>
         /// <seealso cref="Read"/>
         ErrorType Write(const void* buffer, DWORD bytesToWrite, DWORD& bytesWritten, std::uint64_t filePosition,
@@ -418,21 +422,19 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         if (!Windows::Error::IsPending(error))
             return error;
 
-        if (timeout.IsInfinite()) {
-            asyncIoRequest.Wait();
-            return asyncIoRequest.GetError();
-        }
-
-        if (asyncIoRequest.Wait(timeout))
+        // ends on the timeout or on a cancel of the task, also without a limit
+        const auto status = asyncIoRequest.Wait(timeout);
+        if (status == WaitStatus::Signaled)
             return asyncIoRequest.GetError();
 
-        // Timed out: cancel the operation, then wait for its completion without a limit - the
-        // OVERLAPPED lives in the caller's frame. If it completed meanwhile, its result stands.
+        // Timed out or cancelled: cancel the operation, then wait for its completion without a
+        // limit - the OVERLAPPED lives in the caller's frame. If it completed meanwhile, its result
+        // stands.
         file_.CancelIo(asyncIoRequest.GetOverlapped());
         asyncIoRequest.Wait();
 
         error = asyncIoRequest.GetError();
-        return error == Windows::Error::OperationAborted ? Windows::Error::TimedOut : error;
+        return error == Windows::Error::OperationAborted && status == WaitStatus::TimedOut ? Windows::Error::TimedOut : error;
     }
 
     inline AsyncFile::ErrorType AsyncFile::Read(void* buffer, DWORD bytesToRead, DWORD& bytesRead, std::uint64_t filePosition, Duration timeout) noexcept

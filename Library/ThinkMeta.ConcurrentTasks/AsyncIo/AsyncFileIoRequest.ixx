@@ -137,14 +137,18 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
         /// <summary>Suspends the calling task until the operation has completed or the timeout has passed.</summary>
         /// <param name="timeout">How long to wait at most.</param>
-        /// <returns><c>true</c> if the operation has completed; <c>false</c> if it timed out.</returns>
+        /// <returns>
+        /// <see cref="WaitStatus::Signaled"/> if the operation has completed;
+        /// <see cref="WaitStatus::TimedOut"/> if it timed out; <see cref="WaitStatus::Cancelled"/> if
+        /// the waiting task was cancelled (<see cref="CancelTask"/>).
+        /// </returns>
         /// <remarks>
-        /// <see cref="WaitableAsyncFileIoRequest_s"/> only. Needs <see cref="EnableTimers"/>, else the wait has no limit. A timeout does not cancel the
+        /// <see cref="WaitableAsyncFileIoRequest_s"/> only. Needs <see cref="EnableTimers"/>, else the wait has no limit. A timeout or cancel does not cancel the
         /// operation: it stays pending and the request must stay alive until it completes (cancel
         /// it with <c>CancelIoEx</c> and Wait, as <see cref="AsyncFile::Read"/> does).
         /// </remarks>
         /// <seealso cref="TryWait"/>
-        bool Wait(Duration timeout) noexcept
+        [[nodiscard]] WaitStatus Wait(Duration timeout) noexcept
             requires(_SuspensionKind == SuspensionKind::Single)
         {
             return event_.Wait(timeout);

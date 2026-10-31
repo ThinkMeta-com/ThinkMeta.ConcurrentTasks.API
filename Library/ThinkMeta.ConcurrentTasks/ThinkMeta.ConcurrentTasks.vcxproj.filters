@@ -109,6 +109,15 @@
     <ClCompile Include="Windows\WinsockError.ixx">
       <Filter>Windows</Filter>
     </ClCompile>
+    <ClCompile Include="Synchronization\CallbackAwait.ixx">
+      <Filter>Synchronization</Filter>
+    </ClCompile>
+    <ClCompile Include="Windows\HandleAwait.ixx">
+      <Filter>Windows</Filter>
+    </ClCompile>
+    <ClCompile Include="MediaFoundation\EventAwait.ixx">
+      <Filter>Media Foundation</Filter>
+    </ClCompile>
     <ClCompile Include="WinRT\Await.ixx">
       <Filter>WinRT</Filter>
     </ClCompile>
@@ -164,6 +173,9 @@
     </Filter>
     <Filter Include="Memory">
       <UniqueIdentifier>{dd235951-acee-49c9-a629-7f6fb158e775}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Media Foundation">
+      <UniqueIdentifier>{8c2d4e1a-6b3f-4a70-9e15-2f7c0d9b4a61}</UniqueIdentifier>
     </Filter>
     <Filter Include="WinRT">
       <UniqueIdentifier>{5f0c7a3e-2b6d-4e81-9c4a-7d3e1b2a6f90}</UniqueIdentifier>

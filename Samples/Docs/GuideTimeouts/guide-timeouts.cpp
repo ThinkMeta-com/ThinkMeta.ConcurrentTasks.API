@@ -36,10 +36,16 @@ static long long Milliseconds(Clock::duration duration) noexcept
 // Waits until the settings are loaded, but at most 200 ms.
 bool WaitForSettings(TC::Synchronization::ManualResetEvent_s& loaded) noexcept
 {
-    if (loaded.Wait(TC::Duration::Milliseconds(200)))
-        return true; // signaled in time
-    std::printf("loading the settings takes too long\n");
-    return false; // timed out: nothing was taken, a Set may still come
+    switch (loaded.Wait(TC::Duration::Milliseconds(200))) {
+    case TC::WaitStatus::Signaled:
+        return true; // in time
+    case TC::WaitStatus::TimedOut:
+        std::printf("loading the settings takes too long\n");
+        return false; // nothing was taken, a Set may still come
+    case TC::WaitStatus::Cancelled:
+        return false; // this task was cancelled (CancelTask): give up quietly
+    }
+    return false;
 }
 // [/wait-timeout]
 
@@ -136,7 +142,7 @@ int main()
         bool     cancelled = false;
         if (scheduler->AddTimedTask(&save, TC::TaskPriority::Normal,
                                     TC::Duration::Seconds(10))) {
-            cancelled = TC::CancelTimedTask(&save); // same as save.CancelSchedule()
+            cancelled = TC::CancelTask(&save); // same as save.Cancel()
             // Passes either way: a cancelled task exits without running.
             save.Wait();
         }
