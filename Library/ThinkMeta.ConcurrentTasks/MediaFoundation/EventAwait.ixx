@@ -39,7 +39,8 @@ namespace ThinkMeta::ConcurrentTasks::MediaFoundation {
         {
             if (object == nullptr)
                 return E_POINTER;
-            if (iid == __uuidof(IUnknown) || iid == __uuidof(IMFAsyncCallback)) {
+            // IsEqualGUID, not ==: callers may define _NO_SYS_GUID_OPERATOR_EQ_
+            if (IsEqualGUID(iid, __uuidof(IUnknown)) || IsEqualGUID(iid, __uuidof(IMFAsyncCallback))) {
                 *object = static_cast<IMFAsyncCallback*>(this);
                 AddRef();
                 return S_OK;

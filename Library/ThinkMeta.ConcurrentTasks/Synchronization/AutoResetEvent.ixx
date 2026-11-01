@@ -159,11 +159,12 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         {
             auto state = state_.load(std::memory_order_acquire);
             for (;;) {
-                if (state == SetState)
-                    return; // set already: one signal is enough
-                if (state == ResetState) {
+                // No waiter: the signal stays. Set already, it is written again all the same: the
+                // waiter that takes this one signal must see the writes before every Set it stands
+                // for, and a plain read would return before they are visible.
+                if (state == ResetState || state == SetState) {
                     if (state_.compare_exchange_weak(state, SetState, std::memory_order_acq_rel, std::memory_order_acquire))
-                        return; // no waiter: the signal stays
+                        return;
                     continue;
                 }
                 // a waiter: taken out, it receives the signal and the event stays reset

@@ -62,7 +62,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
             STDMETHODIMP QueryInterface(REFIID iid, void** object) noexcept override
             {
-                if (iid == __uuidof(IUnknown) || iid == __uuidof(IMFMediaEventGenerator)) {
+                if (IsEqualGUID(iid, __uuidof(IUnknown)) || IsEqualGUID(iid, __uuidof(IMFMediaEventGenerator))) {
                     *object = static_cast<IMFMediaEventGenerator*>(this);
                     return S_OK;
                 }
