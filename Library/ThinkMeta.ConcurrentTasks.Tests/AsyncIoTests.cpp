@@ -1,15 +1,13 @@
 #include "pch.h"
 #include "TestHelpers.h"
 
-#define NOMINMAX
-#include <Windows.h>
-
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <format>
 #include <string>
 #include <vector>
@@ -18,6 +16,7 @@
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncFile;
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncFileIoRequest;
 import ThinkMeta.ConcurrentTasks.Memory.SequentialMemory;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 import ThinkMeta.ConcurrentTasks.Memory.SpscVirtualMemoryPipe;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
@@ -26,16 +25,18 @@ using namespace Microsoft::VisualStudio::CppUnitTestFramework;
 
 namespace ThinkMeta::ConcurrentTasks::Tests {
 
-    static std::wstring GetTempFilePath()
-    {
-        wchar_t tempPath[MAX_PATH];
-        wchar_t tempFile[MAX_PATH];
-
-        ::GetTempPathW(MAX_PATH, tempPath);
-        ::GetTempFileNameW(tempPath, L"CT_AsyncIo", 0, tempFile);
-
-        return std::wstring(tempFile);
-    }
+    // How the tests open their files: the default reads an existing file that others may read too;
+    // the shared ones let others write meanwhile (the shrinking test cuts a file while it is read).
+    constexpr Platform::FileOptions ReadExisting{};
+    constexpr Platform::FileOptions ReadSharedWithWriters{.shareWrite = true};
+    constexpr Platform::FileOptions OpenReadWrite{.access = Platform::FileAccess::ReadWrite, .shareWrite = true};
+    constexpr Platform::FileOptions CreateReadWrite{.access     = Platform::FileAccess::ReadWrite,
+                                                    .creation   = Platform::FileCreation::CreateAlways,
+                                                    .shareWrite = true};
+    constexpr Platform::FileOptions CreateWrite{.access = Platform::FileAccess::Write, .creation = Platform::FileCreation::CreateAlways, .shareWrite = true};
+    constexpr Platform::FileOptions CreateWriteAlone{.access    = Platform::FileAccess::Write,
+                                                     .creation  = Platform::FileCreation::CreateAlways,
+                                                     .shareRead = false};
 
     // Minimal contiguous sink for AsyncFile::ReadFile bulk reads. It pre-allocates on
     // Initialize and hands out distinct sub-spans of the single buffer per write request.
@@ -144,29 +145,22 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
     class ShrinkingWriteSequentialMemory : public VectorWriteSequentialMemory
     {
     public:
-        ShrinkingWriteSequentialMemory(const std::wstring& path, std::size_t shrinkAtBlock, std::uint64_t newSize)
+        ShrinkingWriteSequentialMemory(const std::filesystem::path& path, std::size_t shrinkAtBlock, std::uint64_t newSize)
             : path_(path), shrinkAtBlock_(shrinkAtBlock), newSize_(newSize)
         {
         }
 
         std::byte* RequestWriteMemory(std::size_t size) noexcept override
         {
-            if (requests_++ == shrinkAtBlock_) {
-                HANDLE file = ::CreateFileW(path_.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-                if (file != INVALID_HANDLE_VALUE) {
-                    LARGE_INTEGER position{};
-                    position.QuadPart = static_cast<LONGLONG>(newSize_);
-                    shrunk_           = ::SetFilePointerEx(file, position, nullptr, FILE_BEGIN) && ::SetEndOfFile(file);
-                    ::CloseHandle(file);
-                }
-            }
+            if (requests_++ == shrinkAtBlock_)
+                shrunk_ = ResizeTestFile(path_, newSize_);
             return VectorWriteSequentialMemory::RequestWriteMemory(size);
         }
 
         bool Shrunk() const noexcept { return shrunk_; }
 
     private:
-        std::wstring  path_;
+        std::filesystem::path path_;
         std::size_t   shrinkAtBlock_;
         std::uint64_t newSize_;
         std::size_t   requests_ = 0;
@@ -174,17 +168,34 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
     };
 
     // A file of the given size with byte i = i * 13 + 5, written synchronously.
-    static void WritePatternFile(const std::wstring& path, std::size_t size)
+    static void WritePatternFile(const std::filesystem::path& path, std::size_t size)
     {
         std::vector<std::byte> data(size);
         for (std::size_t i = 0; i < size; ++i)
             data[i] = static_cast<std::byte>(i * 13 + 5);
-        HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        Assert::IsTrue(file != INVALID_HANDLE_VALUE, L"Failed to create pattern file");
-        DWORD written = 0;
-        const BOOL ok = ::WriteFile(file, data.data(), static_cast<DWORD>(size), &written, nullptr);
-        ::CloseHandle(file);
-        Assert::IsTrue(ok && written == size, L"Failed to write pattern file");
+        Assert::IsTrue(WriteTestFile(path, data.data(), size), L"Failed to write pattern file");
+    }
+
+    // Runs body as a task on a scheduler with the given number of threads and waits for it on the
+    // test thread. The task outlives the scheduler, and so its OnTaskExited. The body only records
+    // what it saw; the test thread asserts, since a failed assertion must not leave a task.
+    template <typename Body>
+    static bool RunAsTask(DWORD numberOfThreads, std::chrono::milliseconds timeout, Body&& body)
+    {
+        std::atomic<bool> done{false};
+        ActionTask        task([&] {
+            body();
+            done.store(true, std::memory_order_release);
+        });
+
+        {
+            ScopedScheduler scheduler(SchedulerInfo{.numberOfThreads = numberOfThreads});
+            scheduler.Start();
+            scheduler.AddTask(&task, TaskPriority::Normal);
+            WaitFor([&done] { return done.load(std::memory_order_acquire); }, timeout);
+            scheduler.Stop();
+        }
+        return done.load(std::memory_order_acquire);
     }
 
     TEST_CLASS(AsyncIoTests)
@@ -192,81 +203,77 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
     public:
         TEST_METHOD(TestAsyncFileWriteAndRead)
         {
+            SkipWithoutAsyncIo();
             ConvertThreadToTask();
-
-            SchedulerInfo schedulerInfo = {.numberOfThreads = 2};
-            ScopedScheduler scheduler(schedulerInfo);
-            scheduler.Start();
 
             Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
 
-            const std::wstring tempFilePath = GetTempFilePath();
-            std::atomic<bool> testPassed{false};
+            const auto tempFilePath = TempFilePath("CT_AsyncIo");
+            const std::string writeData = "Async I/O Test Payload for ConcurrentTasks!";
+            const std::uint32_t writeSize = static_cast<std::uint32_t>(writeData.size());
 
-            auto ioTask = Tasks::Task::Create([&tempFilePath, &testPassed]() {
+            Platform::ErrorCode createError = 0, writeError = 0, readError = 0;
+            std::uint32_t bytesWritten = 0, bytesRead = 0;
+            bool payloadMatches = false;
+
+            const bool finished = RunAsTask(2, std::chrono::seconds(10), [&] {
                 AsyncIo::AsyncFile file;
 
-                auto err = file.Create(
-                    const_cast<wchar_t*>(tempFilePath.c_str()),
-                    GENERIC_READ | GENERIC_WRITE,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    CREATE_ALWAYS,
-                    FILE_ATTRIBUTE_NORMAL
-                );
-
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"Failed to create async temp file");
-
-                const std::string writeData = "Async I/O Test Payload for ConcurrentTasks!";
-                const DWORD writeSize = static_cast<DWORD>(writeData.size());
+                createError = file.Create(tempFilePath.c_str(), CreateReadWrite);
+                if (Platform::Error::Failed(createError))
+                    return;
 
                 // Write Async
                 AsyncIo::WaitableAsyncFileIoRequest writeRequest;
                 writeRequest.SetOffset(0);
-                err = file.WriteAsync(writeData.data(), writeSize, writeRequest);
-
-                if (Windows::Error::Succeeded(err) || err == ERROR_IO_PENDING) {
-                    writeRequest.Wait();
-                    Assert::AreEqual(writeSize, writeRequest.GetTransferredBytes(), L"Bytes written match expected size");
-                } else {
-                    Assert::Fail(L"WriteAsync failed");
-                }
+                writeError = file.WriteAsync(writeData.data(), writeSize, writeRequest);
+                if (!Platform::Error::Succeeded(writeError) && !Platform::Error::IsPending(writeError))
+                    return;
+                writeRequest.Wait();
+                bytesWritten = writeRequest.GetTransferredBytes();
 
                 // Read Async
                 std::vector<char> readBuffer(writeSize, 0);
                 AsyncIo::WaitableAsyncFileIoRequest readRequest;
                 readRequest.SetOffset(0);
-                err = file.ReadAsync(readBuffer.data(), writeSize, readRequest);
-
-                if (Windows::Error::Succeeded(err) || err == ERROR_IO_PENDING) {
-                    readRequest.Wait();
-                    Assert::AreEqual(writeSize, readRequest.GetTransferredBytes(), L"Bytes read match expected size");
-                } else {
-                    Assert::Fail(L"ReadAsync failed");
-                }
+                readError = file.ReadAsync(readBuffer.data(), writeSize, readRequest);
+                if (!Platform::Error::Succeeded(readError) && !Platform::Error::IsPending(readError))
+                    return;
+                readRequest.Wait();
+                bytesRead = readRequest.GetTransferredBytes();
 
                 std::string readData(readBuffer.begin(), readBuffer.end());
-                Assert::AreEqual(writeData, readData, L"Read payload matches written payload");
+                payloadMatches = readData == writeData;
 
                 file.Close();
-                testPassed.store(true, std::memory_order_release);
             });
 
-            scheduler.AddTask(&ioTask, TaskPriority::Normal);
-
-            const bool finished = WaitFor([&testPassed] { return testPassed.load(std::memory_order_acquire); }, std::chrono::seconds(10));
-            Assert::IsTrue(finished, L"AsyncFile write and read test timed out!");
-
             AsyncIo::DisableAsyncIo();
-
-            ::DeleteFileW(tempFilePath.c_str());
-
-            scheduler.Stop();
+            DeleteTestFile(tempFilePath);
             ConvertTaskToThread();
+
+            Assert::IsTrue(finished, L"AsyncFile write and read test timed out!");
+            Assert::IsTrue(Platform::Error::Succeeded(createError), L"Failed to create async temp file");
+            Assert::IsTrue(Platform::Error::Succeeded(writeError) || Platform::Error::IsPending(writeError), L"WriteAsync failed");
+            Assert::AreEqual(writeSize, bytesWritten, L"Bytes written match expected size");
+            Assert::IsTrue(Platform::Error::Succeeded(readError) || Platform::Error::IsPending(readError), L"ReadAsync failed");
+            Assert::AreEqual(writeSize, bytesRead, L"Bytes read match expected size");
+            Assert::IsTrue(payloadMatches, L"Read payload matches written payload");
         }
 
         TEST_METHOD(TestAsyncFileConcurrentOffsetOperations)
         {
+            SkipWithoutAsyncIo();
             ConvertThreadToTask();
+
+            constexpr std::size_t NumSegments = 16;
+            constexpr std::size_t SegmentSize = 64 * 1024 * 1024; // 64 MB per segment = 1 GB total scattered offset operations
+
+            // The tasks outlive the scheduler, and so its OnTaskExited.
+            Synchronization::TaskGroup taskGroup;
+            std::vector<std::unique_ptr<ActionTask>> tasks;
+            tasks.reserve(NumSegments);
+            std::atomic<std::size_t> completedSegments{0};
 
             SchedulerInfo schedulerInfo = {.numberOfThreads = 4};
             ScopedScheduler scheduler(schedulerInfo);
@@ -274,48 +281,35 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
             Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
 
-            const std::wstring tempFilePath = GetTempFilePath();
-            constexpr std::size_t NumSegments = 16;
-            constexpr std::size_t SegmentSize = 64 * 1024 * 1024; // 64 MB per segment = 1 GB total scattered offset operations
+            const auto tempFilePath = TempFilePath("CT_AsyncIo");
 
             // Prepare test file space for 1 GB
             {
                 AsyncIo::AsyncFile initFile;
-                initFile.Create(const_cast<wchar_t*>(tempFilePath.c_str()), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL);
+                initFile.Create(tempFilePath.c_str(), CreateWrite);
                 std::vector<char> initChunk(SegmentSize, 0);
                 for (std::size_t i = 0; i < NumSegments; ++i) {
-                    DWORD written = 0;
+                    std::uint32_t written = 0;
                     initFile.Write(initChunk.data(), static_cast<DWORD>(SegmentSize), written, static_cast<AsyncIo::AsyncFile::FileSize>(i * SegmentSize));
                 }
                 initFile.Close();
             }
 
             AsyncIo::AsyncFile sharedFile;
-            auto createErr = sharedFile.Create(
-                const_cast<wchar_t*>(tempFilePath.c_str()),
-                GENERIC_READ | GENERIC_WRITE,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL
-            );
-            Assert::IsTrue(Windows::Error::Succeeded(createErr), L"Failed to open shared file for async offset ops");
-
-            Synchronization::TaskGroup taskGroup;
-            std::vector<std::unique_ptr<ActionTask>> tasks;
-            tasks.reserve(NumSegments);
-            std::atomic<std::size_t> completedSegments{0};
+            auto createErr = sharedFile.Create(tempFilePath.c_str(), OpenReadWrite);
+            Assert::IsTrue(Platform::Error::Succeeded(createErr), L"Failed to open shared file for async offset ops");
 
             for (std::size_t i = 0; i < NumSegments; ++i) {
                 std::uint64_t offset = i * SegmentSize;
                 char fillChar = static_cast<char>('A' + i);
 
-                tasks.push_back(std::make_unique<ActionTask>([&sharedFile, offset, fillChar, SegmentSize, &completedSegments]() {
+                tasks.push_back(std::make_unique<ActionTask>([&sharedFile, offset, fillChar, &completedSegments]() {
                     std::vector<char> writeBuf(SegmentSize, fillChar);
                     AsyncIo::WaitableAsyncFileIoRequest writeReq;
                     writeReq.SetOffset(offset);
 
                     auto err = sharedFile.WriteAsync(writeBuf.data(), static_cast<DWORD>(SegmentSize), writeReq);
-                    if (Windows::Error::Succeeded(err) || err == ERROR_IO_PENDING) {
+                    if (Platform::Error::Succeeded(err) || Platform::Error::IsPending(err)) {
                         writeReq.Wait();
                     }
 
@@ -324,7 +318,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                     readReq.SetOffset(offset);
 
                     err = sharedFile.ReadAsync(readBuf.data(), static_cast<DWORD>(SegmentSize), readReq);
-                    if (Windows::Error::Succeeded(err) || err == ERROR_IO_PENDING) {
+                    if (Platform::Error::Succeeded(err) || Platform::Error::IsPending(err)) {
                         readReq.Wait();
                     }
 
@@ -346,109 +340,97 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
             taskGroup.Wait();
 
-            Assert::AreEqual(NumSegments, completedSegments.load(std::memory_order_acquire), L"All 16 concurrent 64MB scattered offset segments completed successfully");
-
             sharedFile.Close();
-            AsyncIo::DisableAsyncIo();
-            ::DeleteFileW(tempFilePath.c_str());
-
             scheduler.Stop();
+            AsyncIo::DisableAsyncIo();
+            DeleteTestFile(tempFilePath);
             ConvertTaskToThread();
+
+            Assert::AreEqual(NumSegments, completedSegments.load(std::memory_order_acquire), L"All 16 concurrent 64MB scattered offset segments completed successfully");
         }
 
         TEST_METHOD(TestAsyncFileSyncWrappersAndGetSize)
         {
+            SkipWithoutAsyncIo();
             ConvertThreadToTask();
-
-            SchedulerInfo schedulerInfo = {.numberOfThreads = 2};
-            ScopedScheduler scheduler(schedulerInfo);
-            scheduler.Start();
 
             Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
 
-            const std::wstring tempFilePath = GetTempFilePath();
-            std::atomic<bool> testPassed{false};
+            const auto tempFilePath = TempFilePath("CT_AsyncIo");
+            const std::string writeData = "Synchronous wrapper payload!";
+            const std::uint32_t writeSize = static_cast<std::uint32_t>(writeData.size());
 
-            auto ioTask = Tasks::Task::Create([&tempFilePath, &testPassed]() {
+            Platform::ErrorCode createError = 0, writeError = 0, sizeError = 0, readError = 0;
+            std::uint32_t bytesWritten = 0, bytesRead = 0;
+            AsyncIo::AsyncFile::FileSize size = 0;
+            bool payloadMatches = false;
+
+            const bool finished = RunAsTask(2, std::chrono::seconds(10), [&] {
                 AsyncIo::AsyncFile file;
 
-                auto err = file.Create(
-                    const_cast<wchar_t*>(tempFilePath.c_str()),
-                    GENERIC_READ | GENERIC_WRITE,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    CREATE_ALWAYS,
-                    FILE_ATTRIBUTE_NORMAL
-                );
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"Failed to create async temp file");
-
-                const std::string writeData = "Synchronous wrapper payload!";
-                const DWORD writeSize = static_cast<DWORD>(writeData.size());
+                createError = file.Create(tempFilePath.c_str(), CreateReadWrite);
+                if (Platform::Error::Failed(createError))
+                    return;
 
                 // Position-based synchronous Write wrapper (internally uses _s request).
-                DWORD bytesWritten = 0;
-                err = file.Write(writeData.data(), writeSize, bytesWritten, 0);
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"Sync Write failed");
-                Assert::AreEqual(writeSize, bytesWritten, L"Sync Write transferred byte count mismatch");
+                writeError = file.Write(writeData.data(), writeSize, bytesWritten, 0);
+                if (Platform::Error::Failed(writeError))
+                    return;
 
                 // GetSize must reflect what was written.
-                AsyncIo::AsyncFile::FileSize size = 0;
-                err = file.GetSize(size);
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"GetSize failed");
-                Assert::AreEqual(static_cast<AsyncIo::AsyncFile::FileSize>(writeSize), size, L"GetSize does not match written size");
+                sizeError = file.GetSize(size);
+                if (Platform::Error::Failed(sizeError))
+                    return;
 
                 // Position-based synchronous Read wrapper.
                 std::vector<char> readBuffer(writeSize, 0);
-                DWORD bytesRead = 0;
-                err = file.Read(readBuffer.data(), writeSize, bytesRead, 0);
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"Sync Read failed");
-                Assert::AreEqual(writeSize, bytesRead, L"Sync Read transferred byte count mismatch");
+                readError = file.Read(readBuffer.data(), writeSize, bytesRead, 0);
+                if (Platform::Error::Failed(readError))
+                    return;
 
                 std::string readData(readBuffer.begin(), readBuffer.end());
-                Assert::AreEqual(writeData, readData, L"Sync read payload mismatch");
+                payloadMatches = readData == writeData;
 
                 file.Close();
-                testPassed.store(true, std::memory_order_release);
             });
 
-            scheduler.AddTask(&ioTask, TaskPriority::Normal);
-
-            const bool finished = WaitFor([&testPassed] { return testPassed.load(std::memory_order_acquire); }, std::chrono::seconds(10));
-            Assert::IsTrue(finished, L"AsyncFile sync wrappers test timed out!");
-
             AsyncIo::DisableAsyncIo();
-            ::DeleteFileW(tempFilePath.c_str());
-
-            scheduler.Stop();
+            DeleteTestFile(tempFilePath);
             ConvertTaskToThread();
+
+            Assert::IsTrue(finished, L"AsyncFile sync wrappers test timed out!");
+            Assert::IsTrue(Platform::Error::Succeeded(createError), L"Failed to create async temp file");
+            Assert::IsTrue(Platform::Error::Succeeded(writeError), L"Sync Write failed");
+            Assert::AreEqual(writeSize, bytesWritten, L"Sync Write transferred byte count mismatch");
+            Assert::IsTrue(Platform::Error::Succeeded(sizeError), L"GetSize failed");
+            Assert::AreEqual(static_cast<AsyncIo::AsyncFile::FileSize>(writeSize), size, L"GetSize does not match written size");
+            Assert::IsTrue(Platform::Error::Succeeded(readError), L"Sync Read failed");
+            Assert::AreEqual(writeSize, bytesRead, L"Sync Read transferred byte count mismatch");
+            Assert::IsTrue(payloadMatches, L"Sync read payload mismatch");
         }
 
         TEST_METHOD(TestAsyncFileSingleWaiterAndRequestReuse)
         {
+            SkipWithoutAsyncIo();
             ConvertThreadToTask();
-
-            SchedulerInfo schedulerInfo = {.numberOfThreads = 2};
-            ScopedScheduler scheduler(schedulerInfo);
-            scheduler.Start();
 
             Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
 
-            const std::wstring tempFilePath = GetTempFilePath();
-            std::atomic<bool> testPassed{false};
+            const auto tempFilePath = TempFilePath("CT_AsyncIo");
+            constexpr std::uint32_t BlockSize = 32;
+            constexpr std::size_t NumBlocks = 4;
 
-            auto ioTask = Tasks::Task::Create([&tempFilePath, &testPassed]() {
+            // the values of the first block that failed, or of the last one
+            Platform::ErrorCode createError = 0, writeStartError = 0, writeError = 0, readStartError = 0, readError = 0;
+            std::uint32_t writtenBytes = 0, readBytes = 0;
+            bool blocksMatch = false;
+
+            const bool finished = RunAsTask(2, std::chrono::seconds(10), [&] {
                 AsyncIo::AsyncFile file;
 
-                auto err = file.Create(
-                    const_cast<wchar_t*>(tempFilePath.c_str()),
-                    GENERIC_READ | GENERIC_WRITE,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    CREATE_ALWAYS,
-                    FILE_ATTRIBUTE_NORMAL
-                );
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"Failed to create async temp file");
-
-                constexpr DWORD BlockSize = 32;
-                constexpr std::size_t NumBlocks = 4;
+                createError = file.Create(tempFilePath.c_str(), CreateReadWrite);
+                if (Platform::Error::Failed(createError))
+                    return;
 
                 // Reuse a single single-waiter request object across multiple writes.
                 AsyncIo::WaitableAsyncFileIoRequest_s writeRequest;
@@ -457,15 +439,15 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
                     writeRequest.Reset();
                     writeRequest.SetOffset(i * BlockSize);
-                    err = file.WriteAsync(block.data(), BlockSize, writeRequest);
+                    writeStartError = file.WriteAsync(block.data(), BlockSize, writeRequest);
+                    if (!Platform::Error::Succeeded(writeStartError) && !Platform::Error::IsPending(writeStartError))
+                        return;
 
-                    if (Windows::Error::Succeeded(err) || err == ERROR_IO_PENDING) {
-                        writeRequest.Wait();
-                        Assert::IsTrue(Windows::Error::Succeeded(writeRequest.GetError()), L"Reused write request reported an error");
-                        Assert::AreEqual(BlockSize, writeRequest.GetTransferredBytes(), L"Reused write request byte count mismatch");
-                    } else {
-                        Assert::Fail(L"WriteAsync (reused request) failed");
-                    }
+                    writeRequest.Wait();
+                    writeError   = writeRequest.GetError();
+                    writtenBytes = writeRequest.GetTransferredBytes();
+                    if (Platform::Error::Failed(writeError) || writtenBytes != BlockSize)
+                        return;
                 }
 
                 // Reuse a single single-waiter request object across multiple reads.
@@ -475,93 +457,85 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
                     readRequest.Reset();
                     readRequest.SetOffset(i * BlockSize);
-                    err = file.ReadAsync(block.data(), BlockSize, readRequest);
+                    readStartError = file.ReadAsync(block.data(), BlockSize, readRequest);
+                    if (!Platform::Error::Succeeded(readStartError) && !Platform::Error::IsPending(readStartError))
+                        return;
 
-                    if (Windows::Error::Succeeded(err) || err == ERROR_IO_PENDING) {
-                        readRequest.Wait();
-                        Assert::IsTrue(Windows::Error::Succeeded(readRequest.GetError()), L"Reused read request reported an error");
-                        Assert::AreEqual(BlockSize, readRequest.GetTransferredBytes(), L"Reused read request byte count mismatch");
-                    } else {
-                        Assert::Fail(L"ReadAsync (reused request) failed");
-                    }
+                    readRequest.Wait();
+                    readError = readRequest.GetError();
+                    readBytes = readRequest.GetTransferredBytes();
+                    if (Platform::Error::Failed(readError) || readBytes != BlockSize)
+                        return;
 
                     const char expected = static_cast<char>('0' + i);
-                    bool match = std::all_of(block.begin(), block.end(), [expected](char c) { return c == expected; });
-                    Assert::IsTrue(match, L"Reused read block content mismatch");
+                    if (!std::all_of(block.begin(), block.end(), [expected](char c) { return c == expected; }))
+                        return;
                 }
+                blocksMatch = true;
 
                 file.Close();
-                testPassed.store(true, std::memory_order_release);
             });
 
-            scheduler.AddTask(&ioTask, TaskPriority::Normal);
-
-            const bool finished = WaitFor([&testPassed] { return testPassed.load(std::memory_order_acquire); }, std::chrono::seconds(10));
-            Assert::IsTrue(finished, L"AsyncFile single-waiter/request-reuse test timed out!");
-
             AsyncIo::DisableAsyncIo();
-            ::DeleteFileW(tempFilePath.c_str());
-
-            scheduler.Stop();
+            DeleteTestFile(tempFilePath);
             ConvertTaskToThread();
+
+            Assert::IsTrue(finished, L"AsyncFile single-waiter/request-reuse test timed out!");
+            Assert::IsTrue(Platform::Error::Succeeded(createError), L"Failed to create async temp file");
+            Assert::IsTrue(Platform::Error::Succeeded(writeStartError) || Platform::Error::IsPending(writeStartError), L"WriteAsync (reused request) failed");
+            Assert::IsTrue(Platform::Error::Succeeded(writeError), L"Reused write request reported an error");
+            Assert::AreEqual(BlockSize, writtenBytes, L"Reused write request byte count mismatch");
+            Assert::IsTrue(Platform::Error::Succeeded(readStartError) || Platform::Error::IsPending(readStartError), L"ReadAsync (reused request) failed");
+            Assert::IsTrue(Platform::Error::Succeeded(readError), L"Reused read request reported an error");
+            Assert::AreEqual(BlockSize, readBytes, L"Reused read request byte count mismatch");
+            Assert::IsTrue(blocksMatch, L"Reused read block content mismatch");
         }
 
         TEST_METHOD(TestAsyncFileEofAndErrorPaths)
         {
+            SkipWithoutAsyncIo();
             ConvertThreadToTask();
-
-            SchedulerInfo schedulerInfo = {.numberOfThreads = 2};
-            ScopedScheduler scheduler(schedulerInfo);
-            scheduler.Start();
 
             Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
 
-            const std::wstring tempFilePath = GetTempFilePath();
-            std::atomic<bool> testPassed{false};
+            const auto tempFilePath = TempFilePath("CT_AsyncIo");
+            const auto missingPath  = TempFilePath("CT_AsyncIo"); // never created
+            const std::string writeData = "small";
+            const std::uint32_t writeSize = static_cast<std::uint32_t>(writeData.size());
 
-            auto ioTask = Tasks::Task::Create([&tempFilePath, &testPassed]() {
+            Platform::ErrorCode missingError = 0, createError = 0, writeError = 0;
+            bool missingValid = true;
+            std::uint32_t eofBytes = 0, pastEofBytes = 0;
+
+            const bool finished = RunAsTask(2, std::chrono::seconds(10), [&] {
                 // Opening a non-existent file with OPEN_EXISTING must fail.
                 {
                     AsyncIo::AsyncFile missingFile;
-                    const std::wstring missingPath = tempFilePath + L".__no_such_file__";
-                    auto err = missingFile.Create(
-                        const_cast<wchar_t*>(missingPath.c_str()),
-                        GENERIC_READ,
-                        FILE_SHARE_READ,
-                        OPEN_EXISTING,
-                        FILE_ATTRIBUTE_NORMAL
-                    );
-                    Assert::IsTrue(Windows::Error::Failed(err), L"Opening a non-existent file should fail");
-                    Assert::IsFalse(missingFile.IsValid(), L"Missing file handle should be invalid");
+                    missingError = missingFile.Create(missingPath.c_str(), ReadExisting);
+                    missingValid = missingFile.IsValid();
                 }
 
                 AsyncIo::AsyncFile file;
-                auto err = file.Create(
-                    const_cast<wchar_t*>(tempFilePath.c_str()),
-                    GENERIC_READ | GENERIC_WRITE,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    CREATE_ALWAYS,
-                    FILE_ATTRIBUTE_NORMAL
-                );
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"Failed to create async temp file");
+                createError = file.Create(tempFilePath.c_str(), CreateReadWrite);
+                if (Platform::Error::Failed(createError))
+                    return;
 
-                const std::string writeData = "small";
-                const DWORD writeSize = static_cast<DWORD>(writeData.size());
-                DWORD bytesWritten = 0;
-                err = file.Write(writeData.data(), writeSize, bytesWritten, 0);
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"Sync Write failed");
+                std::uint32_t bytesWritten = 0;
+                writeError = file.Write(writeData.data(), writeSize, bytesWritten, 0);
+                if (Platform::Error::Failed(writeError))
+                    return;
 
                 // Reading beyond EOF: request more bytes than the file contains.
                 constexpr DWORD ReadSize = 512;
                 std::vector<char> readBuffer(ReadSize, 0);
                 AsyncIo::WaitableAsyncFileIoRequest readRequest;
                 readRequest.SetOffset(0);
-                err = file.ReadAsync(readBuffer.data(), ReadSize, readRequest);
+                auto err = file.ReadAsync(readBuffer.data(), ReadSize, readRequest);
 
-                if (Windows::Error::Succeeded(err) || err == ERROR_IO_PENDING) {
+                if (Platform::Error::Succeeded(err) || Platform::Error::IsPending(err)) {
                     readRequest.Wait();
                     // A read that hits EOF returns only the available bytes (or a handled EOF error).
-                    Assert::IsTrue(readRequest.GetTransferredBytes() <= writeSize, L"EOF read must not report more than what exists");
+                    eofBytes = readRequest.GetTransferredBytes();
                 }
 
                 // Reading entirely past EOF should transfer zero bytes.
@@ -569,58 +543,54 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 pastEofRequest.SetOffset(4096);
                 std::vector<char> pastBuffer(ReadSize, 0);
                 err = file.ReadAsync(pastBuffer.data(), ReadSize, pastEofRequest);
-                if (Windows::Error::Succeeded(err) || err == ERROR_IO_PENDING) {
+                if (Platform::Error::Succeeded(err) || Platform::Error::IsPending(err)) {
                     pastEofRequest.Wait();
-                    Assert::AreEqual(static_cast<DWORD>(0), pastEofRequest.GetTransferredBytes(), L"Read entirely past EOF must transfer zero bytes");
+                    pastEofBytes = pastEofRequest.GetTransferredBytes();
                 }
 
                 file.Close();
-                testPassed.store(true, std::memory_order_release);
             });
 
-            scheduler.AddTask(&ioTask, TaskPriority::Normal);
-
-            const bool finished = WaitFor([&testPassed] { return testPassed.load(std::memory_order_acquire); }, std::chrono::seconds(10));
-            Assert::IsTrue(finished, L"AsyncFile EOF/error paths test timed out!");
-
             AsyncIo::DisableAsyncIo();
-            ::DeleteFileW(tempFilePath.c_str());
-
-            scheduler.Stop();
+            DeleteTestFile(tempFilePath);
             ConvertTaskToThread();
+
+            Assert::IsTrue(finished, L"AsyncFile EOF/error paths test timed out!");
+            Assert::IsTrue(Platform::Error::Failed(missingError), L"Opening a non-existent file should fail");
+            Assert::IsFalse(missingValid, L"Missing file handle should be invalid");
+            Assert::IsTrue(Platform::Error::Succeeded(createError), L"Failed to create async temp file");
+            Assert::IsTrue(Platform::Error::Succeeded(writeError), L"Sync Write failed");
+            Assert::IsTrue(eofBytes <= writeSize, L"EOF read must not report more than what exists");
+            Assert::AreEqual(std::uint32_t{0}, pastEofBytes, L"Read entirely past EOF must transfer zero bytes");
         }
 
         TEST_METHOD(TestAsyncFileReadFileBulk)
         {
+            SkipWithoutAsyncIo();
             ConvertThreadToTask();
-
-            SchedulerInfo schedulerInfo = {.numberOfThreads = 4};
-            ScopedScheduler scheduler(schedulerInfo);
-            scheduler.Start();
 
             Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
 
-            const std::wstring tempFilePath = GetTempFilePath();
+            const auto tempFilePath = TempFilePath("CT_AsyncIo");
 
             // 1 GiB payload (1,073,741,824 bytes) to benchmark NVMe throughput.
             constexpr std::size_t TotalPayloadSize = 1024ULL * 1024ULL * 1024ULL; // 1 GB
             constexpr std::size_t ChunkSize        = 64 * 1024 * 1024;             // 64 MB chunk
             constexpr std::size_t NumChunks        = TotalPayloadSize / ChunkSize;
 
-            std::atomic<bool> testPassed{false};
+            Platform::ErrorCode createError = 0, writeError = 0, readError = 0;
+            std::uint32_t chunkWritten = 0;
+            bool endOfStream = false;
+            std::size_t writtenSize = 0, bufferSize = 0;
+            bool contentMatches = false;
 
-            auto ioTask = Tasks::Task::Create([&tempFilePath, &testPassed, TotalPayloadSize, ChunkSize, NumChunks]() {
+            const bool finished = RunAsTask(4, std::chrono::seconds(120), [&] {
                 // Write 1 GB in 64 MB chunks using the async file API.
                 {
                     AsyncIo::AsyncFile writeFile;
-                    auto err = writeFile.Create(
-                        const_cast<wchar_t*>(tempFilePath.c_str()),
-                        GENERIC_WRITE,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE,
-                        CREATE_ALWAYS,
-                        FILE_ATTRIBUTE_NORMAL
-                    );
-                    Assert::IsTrue(Windows::Error::Succeeded(err), L"Failed to create file for 1 GB bulk write");
+                    createError = writeFile.Create(tempFilePath.c_str(), CreateWrite);
+                    if (Platform::Error::Failed(createError))
+                        return;
 
                     std::vector<char> chunkBuffer(ChunkSize);
                     for (std::size_t c = 0; c < NumChunks; ++c) {
@@ -629,10 +599,10 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                             chunkBuffer[i] = static_cast<char>((offset + i) * 31 + 7);
                         }
 
-                        DWORD written = 0;
-                        err = writeFile.Write(chunkBuffer.data(), static_cast<DWORD>(ChunkSize), written, static_cast<AsyncIo::AsyncFile::FileSize>(offset));
-                        Assert::IsTrue(Windows::Error::Succeeded(err), L"Chunk write failed during 1 GB write");
-                        Assert::AreEqual(static_cast<DWORD>(ChunkSize), written, L"Chunk write byte count mismatch");
+                        chunkWritten = 0;
+                        writeError = writeFile.Write(chunkBuffer.data(), static_cast<DWORD>(ChunkSize), chunkWritten, static_cast<AsyncIo::AsyncFile::FileSize>(offset));
+                        if (Platform::Error::Failed(writeError) || chunkWritten != static_cast<DWORD>(ChunkSize))
+                            return;
                     }
 
                     writeFile.Close();
@@ -640,21 +610,14 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
                 // Read the whole 1 GB file back through the static bulk ReadFile pipeline.
                 VectorWriteSequentialMemory sink;
-                auto err = AsyncIo::AsyncFile::ReadFile(
-                    const_cast<wchar_t*>(tempFilePath.c_str()),
-                    GENERIC_READ,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL,
-                    &sink
-                );
-
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"Bulk ReadFile 1 GB failed");
-                Assert::IsTrue(sink.IsEndOfStream(), L"Bulk ReadFile 1 GB did not mark end of stream");
-                Assert::AreEqual(TotalPayloadSize, sink.GetWrittenSize(), L"Bulk ReadFile 1 GB size mismatch");
+                readError = AsyncIo::AsyncFile::ReadFile(tempFilePath.c_str(), ReadSharedWithWriters, &sink);
+                endOfStream = sink.IsEndOfStream();
+                writtenSize = sink.GetWrittenSize();
 
                 const auto& buffer = sink.GetBuffer();
-                Assert::AreEqual(TotalPayloadSize, buffer.size(), L"Read buffer size must equal 1 GB");
+                bufferSize = buffer.size();
+                if (Platform::Error::Failed(readError) || bufferSize != TotalPayloadSize)
+                    return;
 
                 // Sample-check contents across chunks to verify integrity
                 bool match = true;
@@ -669,193 +632,170 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                     }
                     if (!match) break;
                 }
-                Assert::IsTrue(match, L"1 GB ReadFile payload content mismatch");
-
-                testPassed.store(true, std::memory_order_release);
+                contentMatches = match;
             });
 
-            scheduler.AddTask(&ioTask, TaskPriority::Normal);
-
-            const bool finished = WaitFor([&testPassed] { return testPassed.load(std::memory_order_acquire); }, std::chrono::seconds(120));
-            Assert::IsTrue(finished, L"1 GB AsyncFile bulk ReadFile test timed out!");
-
             AsyncIo::DisableAsyncIo();
-            ::DeleteFileW(tempFilePath.c_str());
-
-            scheduler.Stop();
+            DeleteTestFile(tempFilePath);
             ConvertTaskToThread();
+
+            Assert::IsTrue(finished, L"1 GB AsyncFile bulk ReadFile test timed out!");
+            Assert::IsTrue(Platform::Error::Succeeded(createError), L"Failed to create file for 1 GB bulk write");
+            Assert::IsTrue(Platform::Error::Succeeded(writeError), L"Chunk write failed during 1 GB write");
+            Assert::AreEqual(static_cast<std::uint32_t>(ChunkSize), chunkWritten, L"Chunk write byte count mismatch");
+            Assert::IsTrue(Platform::Error::Succeeded(readError), L"Bulk ReadFile 1 GB failed");
+            Assert::IsTrue(endOfStream, L"Bulk ReadFile 1 GB did not mark end of stream");
+            Assert::AreEqual(TotalPayloadSize, writtenSize, L"Bulk ReadFile 1 GB size mismatch");
+            Assert::AreEqual(TotalPayloadSize, bufferSize, L"Read buffer size must equal 1 GB");
+            Assert::IsTrue(contentMatches, L"1 GB ReadFile payload content mismatch");
         }
         TEST_METHOD(TestAsyncFileBulkOptionsAndOffset)
         {
+            SkipWithoutAsyncIo();
             ConvertThreadToTask();
-
-            SchedulerInfo schedulerInfo = {.numberOfThreads = 2};
-            ScopedScheduler scheduler(schedulerInfo);
-            scheduler.Start();
 
             Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
 
-            const std::wstring sourcePath = GetTempFilePath();
-            const std::wstring copyPath   = GetTempFilePath();
+            const auto sourcePath = TempFilePath("CT_AsyncIo");
+            const auto copyPath = TempFilePath("CT_AsyncIo");
             constexpr std::size_t FileSize = 3 * 1024 * 1024 + 123; // not a multiple of any block size
             constexpr std::size_t Offset   = 1000;
             WritePatternFile(sourcePath, FileSize);
 
-            std::atomic<bool> testPassed{false};
+            Platform::ErrorCode partError = 0, wholeError = 0, writeError = 0, copyError = 0;
+            bool partEndOfStream = false, partMatches = false, copyMatches = false;
+            std::size_t partSize = 0, wholeSize = 0, releasedSize = 0;
 
-            auto ioTask = Tasks::Task::Create([&sourcePath, &copyPath, &testPassed, FileSize, Offset]() {
+            const bool finished = RunAsTask(2, std::chrono::seconds(30), [&] {
                 // read from an offset with a small shape: 64 KB x 3
                 VectorWriteSequentialMemory part;
-                auto err = AsyncIo::AsyncFile::ReadFile(const_cast<wchar_t*>(sourcePath.c_str()), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
-                                                        FILE_ATTRIBUTE_NORMAL, &part, AsyncIo::BulkIoOptions{64 * 1024, 3, Offset});
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"ReadFile with offset failed");
-                Assert::IsTrue(part.IsEndOfStream(), L"ReadFile with offset did not mark end of stream");
-                Assert::AreEqual(FileSize - Offset, part.GetWrittenSize(), L"ReadFile with offset size mismatch");
+                partError = AsyncIo::AsyncFile::ReadFile(sourcePath.c_str(), ReadExisting, &part, AsyncIo::BulkIoOptions{64 * 1024, 3, Offset});
+                partEndOfStream = part.IsEndOfStream();
+                partSize = part.GetWrittenSize();
+                if (Platform::Error::Failed(partError) || partSize != FileSize - Offset)
+                    return;
                 bool match = true;
                 for (std::size_t i = 0; i < FileSize - Offset && match; ++i)
                     match = part.GetBuffer()[i] == static_cast<std::byte>((i + Offset) * 13 + 5);
-                Assert::IsTrue(match, L"ReadFile with offset content mismatch");
+                partMatches = match;
 
                 // read whole with the default shape, write a copy with 128 KB x 2, read the copy back
                 VectorWriteSequentialMemory whole;
-                err = AsyncIo::AsyncFile::ReadFile(const_cast<wchar_t*>(sourcePath.c_str()), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
-                                                   FILE_ATTRIBUTE_NORMAL, &whole);
-                Assert::IsTrue(Windows::Error::Succeeded(err) && whole.GetWrittenSize() == FileSize, L"ReadFile with the default shape failed");
+                wholeError = AsyncIo::AsyncFile::ReadFile(sourcePath.c_str(), ReadExisting, &whole);
+                wholeSize = whole.GetWrittenSize();
+                if (Platform::Error::Failed(wholeError) || wholeSize != FileSize)
+                    return;
 
                 VectorReadSequentialMemory source(whole.GetBuffer());
-                err = AsyncIo::AsyncFile::WriteFile(const_cast<wchar_t*>(copyPath.c_str()), GENERIC_WRITE, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                                                    &source, AsyncIo::BulkIoOptions{128 * 1024, 2});
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"WriteFile with options failed");
-                Assert::AreEqual(FileSize, source.GetReleasedSize(), L"WriteFile did not release every block");
+                writeError = AsyncIo::AsyncFile::WriteFile(copyPath.c_str(), CreateWriteAlone, &source, AsyncIo::BulkIoOptions{128 * 1024, 2});
+                releasedSize = source.GetReleasedSize();
+                if (Platform::Error::Failed(writeError))
+                    return;
 
                 VectorWriteSequentialMemory copy;
-                err = AsyncIo::AsyncFile::ReadFile(const_cast<wchar_t*>(copyPath.c_str()), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
-                                                   FILE_ATTRIBUTE_NORMAL, &copy);
-                Assert::IsTrue(Windows::Error::Succeeded(err), L"ReadFile of the copy failed");
-                Assert::IsTrue(copy.GetBuffer() == whole.GetBuffer(), L"WriteFile copy differs from the source");
-
-                testPassed.store(true, std::memory_order_release);
+                copyError = AsyncIo::AsyncFile::ReadFile(copyPath.c_str(), ReadExisting, &copy);
+                copyMatches = copy.GetBuffer() == whole.GetBuffer();
             });
 
-            scheduler.AddTask(&ioTask, TaskPriority::Normal);
-
-            const bool finished = WaitFor([&testPassed] { return testPassed.load(std::memory_order_acquire); }, std::chrono::seconds(30));
-            Assert::IsTrue(finished, L"AsyncFile bulk options test timed out or failed");
-
             AsyncIo::DisableAsyncIo();
-            ::DeleteFileW(sourcePath.c_str());
-            ::DeleteFileW(copyPath.c_str());
-
-            scheduler.Stop();
+            DeleteTestFile(sourcePath);
+            DeleteTestFile(copyPath);
             ConvertTaskToThread();
+
+            Assert::IsTrue(finished, L"AsyncFile bulk options test timed out or failed");
+            Assert::IsTrue(Platform::Error::Succeeded(partError), L"ReadFile with offset failed");
+            Assert::IsTrue(partEndOfStream, L"ReadFile with offset did not mark end of stream");
+            Assert::AreEqual(FileSize - Offset, partSize, L"ReadFile with offset size mismatch");
+            Assert::IsTrue(partMatches, L"ReadFile with offset content mismatch");
+            Assert::IsTrue(Platform::Error::Succeeded(wholeError) && wholeSize == FileSize, L"ReadFile with the default shape failed");
+            Assert::IsTrue(Platform::Error::Succeeded(writeError), L"WriteFile with options failed");
+            Assert::AreEqual(FileSize, releasedSize, L"WriteFile did not release every block");
+            Assert::IsTrue(Platform::Error::Succeeded(copyError), L"ReadFile of the copy failed");
+            Assert::IsTrue(copyMatches, L"WriteFile copy differs from the source");
         }
 
         TEST_METHOD(TestAsyncFileReadFileOutOfMemoryEndsCleanly)
         {
+            SkipWithoutAsyncIo();
             ConvertThreadToTask();
-
-            SchedulerInfo schedulerInfo = {.numberOfThreads = 2};
-            ScopedScheduler scheduler(schedulerInfo);
-            scheduler.Start();
 
             Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
 
-            const std::wstring path = GetTempFilePath();
+            const auto path = TempFilePath("CT_AsyncIo");
             constexpr std::size_t FileSize = 4 * 1024 * 1024;
             WritePatternFile(path, FileSize);
 
-            std::atomic<bool> testPassed{false};
+            // the memory fails on the fourth block while up to three reads are in flight; ReadFile
+            // must wait for them, report the error and end the stream
+            FailingWriteSequentialMemory sink(3);
+            Platform::ErrorCode err = 0;
 
-            auto ioTask = Tasks::Task::Create([&path, &testPassed]() {
-                // the memory fails on the fourth block while up to three reads are in flight; ReadFile
-                // must wait for them, report the error and end the stream
-                FailingWriteSequentialMemory sink(3);
-                const auto err = AsyncIo::AsyncFile::ReadFile(const_cast<wchar_t*>(path.c_str()), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
-                                                              FILE_ATTRIBUTE_NORMAL, &sink, AsyncIo::BulkIoOptions{256 * 1024, 4});
-                Assert::AreEqual(static_cast<unsigned long>(ERROR_NOT_ENOUGH_MEMORY), static_cast<unsigned long>(err), L"ReadFile did not report the failed block");
-                Assert::IsTrue(sink.IsEndOfStream(), L"ReadFile did not end the stream after the failure");
-                Assert::AreEqual(static_cast<std::size_t>(3 * 256 * 1024), sink.GetRequestedSize(), L"ReadFile requested blocks after the failure");
-                Assert::IsTrue(sink.GetReleasedSize() <= sink.GetRequestedSize(), L"ReadFile released more than it read");
-
-                testPassed.store(true, std::memory_order_release);
+            const bool finished = RunAsTask(2, std::chrono::seconds(30), [&] {
+                err = AsyncIo::AsyncFile::ReadFile(path.c_str(), ReadExisting, &sink, AsyncIo::BulkIoOptions{256 * 1024, 4});
             });
 
-            scheduler.AddTask(&ioTask, TaskPriority::Normal);
-
-            const bool finished = WaitFor([&testPassed] { return testPassed.load(std::memory_order_acquire); }, std::chrono::seconds(30));
-            Assert::IsTrue(finished, L"AsyncFile ReadFile out-of-memory test timed out or failed");
-
             AsyncIo::DisableAsyncIo();
-            ::DeleteFileW(path.c_str());
-
-            scheduler.Stop();
+            DeleteTestFile(path);
             ConvertTaskToThread();
+
+            Assert::IsTrue(finished, L"AsyncFile ReadFile out-of-memory test timed out or failed");
+            Assert::AreEqual(static_cast<unsigned long>(Platform::Error::NotEnoughMemory), static_cast<unsigned long>(err), L"ReadFile did not report the failed block");
+            Assert::IsTrue(sink.IsEndOfStream(), L"ReadFile did not end the stream after the failure");
+            Assert::AreEqual(static_cast<std::size_t>(3 * 256 * 1024), sink.GetRequestedSize(), L"ReadFile requested blocks after the failure");
+            Assert::IsTrue(sink.GetReleasedSize() <= sink.GetRequestedSize(), L"ReadFile released more than it read");
         }
 
         TEST_METHOD(TestAsyncFileReadFileShrunkFileReportsEof)
         {
+            SkipWithoutAsyncIo();
             ConvertThreadToTask();
-
-            SchedulerInfo schedulerInfo = {.numberOfThreads = 2};
-            ScopedScheduler scheduler(schedulerInfo);
-            scheduler.Start();
 
             Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
 
-            const std::wstring path = GetTempFilePath();
+            const auto path = TempFilePath("CT_AsyncIo");
             static constexpr std::size_t BlockSize = 256 * 1024;
             static constexpr std::size_t FileSize = 2 * BlockSize;
             WritePatternFile(path, FileSize);
 
-            std::atomic<bool> testPassed{false};
+            // one read at a time; the file loses half of its last block before that block is read,
+            // so the read comes back short: ReadFile must report it, not publish a short stream as complete
+            ShrinkingWriteSequentialMemory sink(path, 1, FileSize - BlockSize / 2);
+            Platform::ErrorCode err = 0;
 
-            auto ioTask = Tasks::Task::Create([&path, &testPassed]() {
-                // one read at a time; the file loses half of its last block before that block is read,
-                // so the read comes back short: ReadFile must report it, not publish a short stream as complete
-                ShrinkingWriteSequentialMemory sink(path, 1, FileSize - BlockSize / 2);
-                const auto err = AsyncIo::AsyncFile::ReadFile(const_cast<wchar_t*>(path.c_str()), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, &sink, AsyncIo::BulkIoOptions{BlockSize, 1});
-                Assert::IsTrue(sink.Shrunk(), L"The test could not shrink the file");
-                Assert::AreEqual(static_cast<unsigned long>(ERROR_HANDLE_EOF), static_cast<unsigned long>(err), L"ReadFile did not report the short read");
-                Assert::IsTrue(sink.IsEndOfStream(), L"ReadFile did not end the stream after the short read");
-                Assert::AreEqual(BlockSize, sink.GetWrittenSize(), L"ReadFile published the short block");
-
-                testPassed.store(true, std::memory_order_release);
+            const bool finished = RunAsTask(2, std::chrono::seconds(30), [&] {
+                err = AsyncIo::AsyncFile::ReadFile(path.c_str(), ReadSharedWithWriters, &sink, AsyncIo::BulkIoOptions{BlockSize, 1});
             });
 
-            scheduler.AddTask(&ioTask, TaskPriority::Normal);
-
-            const bool finished = WaitFor([&testPassed] { return testPassed.load(std::memory_order_acquire); }, std::chrono::seconds(30));
-            Assert::IsTrue(finished, L"AsyncFile ReadFile shrunk-file test timed out or failed");
-
             AsyncIo::DisableAsyncIo();
-            ::DeleteFileW(path.c_str());
-
-            scheduler.Stop();
+            DeleteTestFile(path);
             ConvertTaskToThread();
+
+            Assert::IsTrue(finished, L"AsyncFile ReadFile shrunk-file test timed out or failed");
+            Assert::IsTrue(sink.Shrunk(), L"The test could not shrink the file");
+            Assert::AreEqual(static_cast<unsigned long>(Platform::Error::EndOfFile), static_cast<unsigned long>(err), L"ReadFile did not report the short read");
+            Assert::IsTrue(sink.IsEndOfStream(), L"ReadFile did not end the stream after the short read");
+            Assert::AreEqual(BlockSize, sink.GetWrittenSize(), L"ReadFile published the short block");
         }
 
         TEST_METHOD(TestAsyncFileReadFileIntoPipeMissingAndEmptyFile)
         {
+            SkipWithoutAsyncIo();
             ConvertThreadToTask();
-
-            SchedulerInfo schedulerInfo = {.numberOfThreads = 2};
-            ScopedScheduler scheduler(schedulerInfo);
-            scheduler.Start();
 
             Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"Failed to enable Async I/O");
 
-            const std::wstring emptyPath = GetTempFilePath(); // GetTempFileName creates it empty
-            const std::wstring missingPath = emptyPath + L".missing";
+            const auto emptyPath   = TempFilePath("CT_AsyncIo");
+            const auto missingPath = TempFilePath("CT_AsyncIo"); // never created
+            Assert::IsTrue(WriteTestFile(emptyPath, nullptr, 0), L"Failed to create the empty file");
 
             // A consumer of the pipe must see an empty stream, not wait forever, when the file is
             // missing (ReadFile fails) or empty (ReadFile succeeds with 0 bytes). Both cases run at
-            // once; all objects live until the scheduler has stopped.
+            // once; all objects, the tasks too, live until the scheduler has stopped.
             struct Case {
-                const std::wstring*           path = nullptr;
+                const std::filesystem::path*  path = nullptr;
                 Memory::SpscVirtualMemoryPipe pipe;
                 std::atomic<int>              done{0};
-                std::atomic<unsigned long>    readError{ERROR_SUCCESS};
+                std::atomic<unsigned long>    readError{Platform::Error::Success};
                 std::atomic<std::size_t>      consumedSize{1};
             };
             std::array<Case, 2> cases;
@@ -863,8 +803,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
             cases[1].path = &emptyPath;
 
             auto produce = [](Case& c) {
-                c.readError.store(AsyncIo::AsyncFile::ReadFile(const_cast<wchar_t*>(c.path->c_str()), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
-                                                               FILE_ATTRIBUTE_NORMAL, &c.pipe));
+                c.readError.store(AsyncIo::AsyncFile::ReadFile(c.path->c_str(), ReadExisting, &c.pipe));
                 c.done.fetch_add(1, std::memory_order_release);
             };
             auto consume = [](Case& c) {
@@ -883,6 +822,11 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
             auto consumer0 = Tasks::Task::Create([&] { consume(cases[0]); });
             auto producer1 = Tasks::Task::Create([&] { produce(cases[1]); });
             auto consumer1 = Tasks::Task::Create([&] { consume(cases[1]); });
+
+            SchedulerInfo schedulerInfo = {.numberOfThreads = 2};
+            ScopedScheduler scheduler(schedulerInfo);
+            scheduler.Start();
+
             scheduler.AddTask(&consumer0, TaskPriority::Normal);
             scheduler.AddTask(&producer0, TaskPriority::Normal);
             scheduler.AddTask(&consumer1, TaskPriority::Normal);
@@ -890,17 +834,17 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
             const bool finished = WaitFor([&] { return cases[0].done.load(std::memory_order_acquire) == 2 && cases[1].done.load(std::memory_order_acquire) == 2; },
                                           std::chrono::seconds(30));
+
+            scheduler.Stop();
+            AsyncIo::DisableAsyncIo();
+            DeleteTestFile(emptyPath);
+            ConvertTaskToThread();
+
             Assert::IsTrue(finished, L"ReadFile into a pipe hung on a missing or empty file");
             for (auto& c : cases)
                 Assert::AreEqual(static_cast<std::size_t>(0), c.consumedSize.load(), L"the consumer did not see an empty stream");
-            Assert::AreEqual(static_cast<unsigned long>(ERROR_FILE_NOT_FOUND), cases[0].readError.load(), L"ReadFile did not report the missing file");
-            Assert::AreEqual(static_cast<unsigned long>(ERROR_SUCCESS), cases[1].readError.load(), L"ReadFile of an empty file failed");
-
-            AsyncIo::DisableAsyncIo();
-            ::DeleteFileW(emptyPath.c_str());
-
-            scheduler.Stop();
-            ConvertTaskToThread();
+            Assert::AreEqual(static_cast<unsigned long>(Platform::Error::FileNotFound), cases[0].readError.load(), L"ReadFile did not report the missing file");
+            Assert::AreEqual(static_cast<unsigned long>(Platform::Error::Success), cases[1].readError.load(), L"ReadFile of an empty file failed");
         }
     };
 } // namespace ThinkMeta::ConcurrentTasks::Tests

@@ -25,6 +25,9 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- CT_ConcurrentStackSList True: the Windows SList instead of the library's own lock-free
+           stack (Collections\ConcurrentStack.ixx), for comparison. -->
+      <PreprocessorDefinitions Condition="'$(CT_ConcurrentStackSList)' == 'True'">CT_CONCURRENT_STACK_SLIST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -39,6 +42,18 @@
     <ClCompile Include="AsyncIo\AsyncTcpSocket.ixx" />
     <ClCompile Include="Collections/BasicStack.ixx" />
     <ClCompile Include="Cpp\Padded.ixx" />
+    <ClCompile Include="Cpp\Atomic128.ixx" />
+    <ClCompile Include="Platform\Clock.ixx" />
+    <ClCompile Include="Platform\PlatformThread.ixx" />
+    <ClCompile Include="Platform\PlatformErrorException.ixx" />
+    <ClCompile Include="Platform\PlatformError.ixx" />
+    <ClCompile Include="Platform\PlatformVirtualMemory.ixx" />
+    <ClCompile Include="Platform\PlatformMutex.ixx" />
+    <ClCompile Include="Platform\PlatformFileOptions.ixx" />
+    <ClCompile Include="Platform\PlatformFile.ixx" />
+    <ClCompile Include="Platform\PlatformSocket.ixx" />
+    <ClCompile Include="Net\IpSocket.ixx" />
+    <ClCompile Include="Net\TcpSocket.ixx" />
     <ClCompile Include="Memory\SpscVirtualMemoryPipe.ixx" />
     <ClCompile Include="Memory\SequentialMemory.ixx" />
     <ClCompile Include="Synchronization\Suspendable.ixx" />
@@ -59,9 +74,7 @@
     <ClCompile Include="Windows\Error.ixx" />
     <ClCompile Include="Windows\File.ixx" />
     <ClCompile Include="Windows\IoCompletionPort.ixx" />
-    <ClCompile Include="Windows\IpSocket.ixx" />
     <ClCompile Include="Windows\Socket.ixx" />
-    <ClCompile Include="Windows\TcpSocket.ixx" />
     <ClCompile Include="Windows\Thread.ixx" />
     <ClCompile Include="Windows\VirtualMemory.ixx" />
     <ClCompile Include="Windows\WinsockError.ixx" />

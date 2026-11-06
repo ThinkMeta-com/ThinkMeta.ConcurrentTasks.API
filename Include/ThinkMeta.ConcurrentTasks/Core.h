@@ -18,25 +18,66 @@
 
 #pragma once
 
-#include <Windows.h>
-
 #include <cstdint>
 
-// Marks the pure interfaces below: they are never instantiated themselves, so their constructors
-// need not set up a vtable of their own. Guarded because the library's Defs.h defines it too.
-#ifndef CT_NOVTABLE
-#    define CT_NOVTABLE __declspec(novtable)
+// The platform: the scheduler is the same everywhere, only the asynchronous I/O part at the end of
+// this header and the native thread type are the platform's own. Guarded because the library's
+// Defs.h defines the same macros.
+#if !defined(CT_PLATFORM_WINDOWS) && !defined(CT_PLATFORM_LINUX)
+#    if defined(_WIN32)
+#        define CT_PLATFORM_WINDOWS 1
+#    elif defined(__linux__)
+#        define CT_PLATFORM_LINUX 1
+#    else
+#        error "ThinkMeta.ConcurrentTasks: unsupported platform"
+#    endif
 #endif
 
-// The core's entry points are exported from ThinkMeta.ConcurrentTasks.Core.dll. A caller gets them
-// as imports; the core itself defines CT_CORE_EXPORTS, and CT_CORE_STATIC covers the case of
-// linking the core's sources directly.
-#if defined(CT_CORE_EXPORTS)
-#    define CT_CORE __declspec(dllexport)
-#elif defined(CT_CORE_STATIC)
-#    define CT_CORE
+#if defined(CT_PLATFORM_WINDOWS)
+// Without the min and max macros of Windows.h: they break std::min and std::max in every file that
+// includes Core.h. A file that includes Windows.h before Core.h decides this itself.
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <Windows.h>
 #else
-#    define CT_CORE __declspec(dllimport)
+#    include <pthread.h>
+#endif
+
+// A path literal as the platform's file functions take it: UTF-16 (L"...") on Windows, UTF-8
+// elsewhere; the library's Platform::FileName is the matching type. CT_PATH("out.bin").
+#ifndef CT_PATH
+#    if defined(CT_PLATFORM_WINDOWS)
+#        define CT_PATH(text) L##text
+#    else
+#        define CT_PATH(text) text
+#    endif
+#endif
+
+// Marks the pure interfaces below: they are never instantiated themselves, so with MSVC their
+// constructors need not set up a vtable of their own. Guarded because the library's Defs.h defines
+// it too.
+#ifndef CT_NOVTABLE
+#    if defined(_MSC_VER) && !defined(__clang__)
+#        define CT_NOVTABLE __declspec(novtable)
+#    else
+#        define CT_NOVTABLE
+#    endif
+#endif
+
+// The core's entry points are exported from the core binary (ThinkMeta.ConcurrentTasks.Core.dll,
+// libThinkMeta.ConcurrentTasks.Core.so.2). A caller gets them as imports; the core itself defines
+// CT_CORE_EXPORTS, and CT_CORE_STATIC covers the case of linking the core's sources directly.
+#if defined(CT_CORE_STATIC)
+#    define CT_CORE
+#elif defined(CT_PLATFORM_WINDOWS)
+#    if defined(CT_CORE_EXPORTS)
+#        define CT_CORE __declspec(dllexport)
+#    else
+#        define CT_CORE __declspec(dllimport)
+#    endif
+#else
+#    define CT_CORE __attribute__((visibility("default")))
 #endif
 
 namespace ThinkMeta::ConcurrentTasks {
@@ -45,36 +86,45 @@ namespace ThinkMeta::ConcurrentTasks {
     /// Passed in <see cref="SchedulerInfo::version"/>; the core accepts only its own version.
     /// </remarks>
     /// <seealso cref="CreateTaskScheduler"/>
-    inline constexpr std::uint32_t SchedulerVersion = 1;
+    inline constexpr std::uint32_t SchedulerVersion = 2;
+
+    /// <summary>The handle of a native thread: <c>HANDLE</c> on Windows, <c>pthread_t</c> elsewhere.</summary>
+    /// <seealso cref="ThreadCallbackProc"/>
+#if defined(CT_PLATFORM_WINDOWS)
+    using NativeThread = void*;
+#else
+    using NativeThread = pthread_t;
+#endif
 
     /// <summary>A span of time, counted in units of 100 nanoseconds.</summary>
     /// <remarks>
     /// 100 ns is the unit of Windows timers. Built with <see cref="Duration::Microseconds"/>,
     /// <see cref="Duration::Milliseconds"/> or <see cref="Duration::Seconds"/>, so that a plain number
     /// never passes for one.
-    /// The core's timer thread waits on a high-resolution waitable timer: on Windows 10 1803 and
-    /// later it fires on a grid of about half a millisecond, otherwise on the system tick (about
-    /// 15.6 ms). A duration says how long at least; the task may start or wake that much later.
+    /// The core's timer thread waits on a high-resolution timer: on Windows 10 1803 and later it
+    /// fires on a grid of about half a millisecond, on older Windows on the system tick (about
+    /// 15.6 ms), on Linux on the kernel's high-resolution timers. A duration says how long at
+    /// least; the task may start or wake that much later.
     /// </remarks>
     /// <seealso cref="Duration::Infinite"/>
     struct Duration {
         /// <summary>The length in units of 100 nanoseconds.</summary>
-        long long hundredNanoseconds;
+        std::int64_t hundredNanoseconds;
 
         /// <summary>A duration of microseconds.</summary>
         /// <param name="count">Number of microseconds; small enough not to overflow.</param>
         /// <returns>The duration of <paramref name="count"/> microseconds.</returns>
-        static constexpr Duration Microseconds(long long count) noexcept { return {count * 10}; }
+        static constexpr Duration Microseconds(std::int64_t count) noexcept { return {count * 10}; }
 
         /// <summary>A duration of milliseconds.</summary>
         /// <param name="count">Number of milliseconds; small enough not to overflow.</param>
         /// <returns>The duration of <paramref name="count"/> milliseconds.</returns>
-        static constexpr Duration Milliseconds(long long count) noexcept { return {count * 10000}; }
+        static constexpr Duration Milliseconds(std::int64_t count) noexcept { return {count * 10000}; }
 
         /// <summary>A duration of seconds.</summary>
         /// <param name="count">Number of seconds; small enough not to overflow.</param>
         /// <returns>The duration of <paramref name="count"/> seconds.</returns>
-        static constexpr Duration Seconds(long long count) noexcept { return {count * 10000000}; }
+        static constexpr Duration Seconds(std::int64_t count) noexcept { return {count * 10000000}; }
 
         /// <summary>A timeout that never expires.</summary>
         /// <returns>The largest representable duration, reserved as "no timeout".</returns>
@@ -95,12 +145,24 @@ namespace ThinkMeta::ConcurrentTasks {
     /// <summary>Largest task queue capacity <see cref="CreateTaskScheduler"/> accepts.</summary>
     inline constexpr std::uint32_t MaximumTaskQueueCapacity = std::uint32_t{1} << 20;
 
+    /// <summary>An entry of an intrusive singly linked list: the link lives in the item.</summary>
+    /// <remarks>
+    /// Items of <see cref="Collections::BasicStack"/> and <see cref="Collections::ConcurrentStack"/>
+    /// derive from it; whoever holds an item on a list owns its <see cref="next"/>. Aligned to 16
+    /// bytes, as the lock-free stack requires; on Windows it has the layout of <c>SLIST_ENTRY</c>.
+    /// </remarks>
+    /// <seealso cref="TaskEntry"/>
+    struct alignas(16) ListEntry {
+        /// <summary>The next item on the list, or <c>nullptr</c> at its end.</summary>
+        ListEntry* next;
+    };
+
     /// <summary>The scheduler-owned bookkeeping of one task.</summary>
     /// <remarks>
     /// Addressed as an opaque handle (<see cref="TaskHandle"/>). The layout is private to the core.
     /// </remarks>
     /// <seealso cref="TaskHandle"/>
-    struct TaskEntry : SLIST_ENTRY {};
+    struct TaskEntry : ListEntry {};
 
     /// <summary>Handle of a task.</summary>
     /// <remarks>
@@ -113,7 +175,7 @@ namespace ThinkMeta::ConcurrentTasks {
     /// <summary>The bookkeeping of a task while it is suspended.</summary>
     /// <remarks>
     /// The same object as its <see cref="TaskEntry"/>, typed for the suspended state. The leading
-    /// <c>SLIST_ENTRY</c> belongs to whoever suspended the task: a synchronization primitive may
+    /// <see cref="ListEntry"/> belongs to whoever suspended the task: a synchronization primitive may
     /// chain suspended tasks through it (see <see cref="Collections::BasicStack"/> and
     /// <see cref="Collections::ConcurrentStack"/>) from the moment
     /// <see cref="ISuspendCallback::OnSuspended"/> hands it over until it passes it back to
@@ -135,7 +197,7 @@ namespace ThinkMeta::ConcurrentTasks {
 
     /// <summary>Tells how a wait ended.</summary>
     /// <seealso cref="SuspendTaskFor"/>
-    enum class WaitStatus : int {
+    enum class WaitStatus : std::int32_t {
         /// <summary>A <see cref="ResumeTask"/> ended the wait: the condition came true.</summary>
         Signaled,
 
@@ -151,7 +213,7 @@ namespace ThinkMeta::ConcurrentTasks {
     /// Default scheduler only; <see cref="SchedulerKind::TaskSwap"/> and converted threads ignore
     /// the flag.
     /// </remarks>
-    enum class YieldFlags {
+    enum class YieldFlags : std::int32_t {
         /// <summary>Lets the next runnable task run.</summary>
         /// <remarks>
         /// The task goes back to the end of its priority's queue; if nothing else is runnable, it
@@ -173,7 +235,7 @@ namespace ThinkMeta::ConcurrentTasks {
     /// ignores priorities.
     /// </remarks>
     /// <seealso cref="SetTaskPriority"/>
-    enum class TaskPriority : int {
+    enum class TaskPriority : std::int32_t {
         /// <summary>Inherits the calling task's priority.</summary>
         /// <remarks>
         /// For <see cref="ITaskScheduler::AddTask"/>: the calling task's priority, or
@@ -190,7 +252,7 @@ namespace ThinkMeta::ConcurrentTasks {
     };
 
     /// <summary>Tells a <see cref="ThreadCallbackProc"/> why it is called.</summary>
-    enum class ThreadCallbackReason {
+    enum class ThreadCallbackReason : std::int32_t {
         /// <summary>A new scheduler thread starts.</summary>
         /// <remarks>Called on that thread before it runs its first task.</remarks>
         Starting,
@@ -205,7 +267,7 @@ namespace ThinkMeta::ConcurrentTasks {
 
     /// <summary>Selects the scheduler implementation.</summary>
     /// <seealso cref="CreateTaskScheduler"/>
-    enum class SchedulerKind {
+    enum class SchedulerKind : std::int32_t {
         /// <summary>Work-stealing scheduler over several threads.</summary>
         /// <remarks>The thread count is <see cref="SchedulerInfo::numberOfThreads"/>.</remarks>
         Default,
@@ -519,8 +581,9 @@ namespace ThinkMeta::ConcurrentTasks {
     /// <param name="taskScheduler">The scheduler the thread belongs to.</param>
     /// <param name="threadIndex">0-based index of the thread within its scheduler.</param>
     /// <param name="thread">
-    /// The scheduler thread's handle (full access). Owned by the scheduler and valid until it is
-    /// destroyed; duplicate it to keep it longer.
+    /// The scheduler thread's native handle: on Windows a <c>HANDLE</c> with full access, owned by
+    /// the scheduler and valid until it is destroyed (duplicate it to keep it longer); elsewhere
+    /// the <c>pthread_t</c>.
     /// </param>
     /// <param name="context"><see cref="SchedulerInfo::threadCallbackContext"/>.</param>
     /// <param name="reason">See <see cref="ThreadCallbackReason"/>.</param>
@@ -530,7 +593,7 @@ namespace ThinkMeta::ConcurrentTasks {
     /// or the task functions. Only the <see cref="SchedulerKind::Default"/> scheduler calls it.
     /// </remarks>
     /// <seealso cref="SchedulerInfo::threadCallback"/>
-    using ThreadCallbackProc = void (*)(ITaskScheduler* taskScheduler, std::uint32_t threadIndex, HANDLE thread, void* context, ThreadCallbackReason reason) noexcept;
+    using ThreadCallbackProc = void (*)(ITaskScheduler* taskScheduler, std::uint32_t threadIndex, NativeThread thread, void* context, ThreadCallbackReason reason) noexcept;
 
     /// <summary>Parameters of <see cref="CreateTaskScheduler"/>.</summary>
     /// <remarks>The core copies the struct.</remarks>
@@ -569,6 +632,24 @@ namespace ThinkMeta::ConcurrentTasks {
         /// <see cref="SchedulerKind::TaskSwap"/>.
         /// </remarks>
         std::uint32_t taskQueueCapacity = 0;
+
+        /// <summary>Size of the stack of each task, in bytes.</summary>
+        /// <remarks>
+        /// Address space reserved per task; memory is committed as the stack grows. <c>0</c> means
+        /// the platform's default: on Windows the stack reserve of the executable's header (1 MiB
+        /// unless the linker was told otherwise), on Linux 1 MiB. Rounded up to the granularity of
+        /// address space (64 KiB on Windows, the page size on Linux). Every task context the
+        /// scheduler creates gets a stack of this size; a task's stack must hold its deepest call
+        /// chain, as there is no way to grow it later. A <see cref="SchedulerKind::Default"/> and a
+        /// <see cref="SchedulerKind::TaskSwap"/> scheduler honour it; a dispatcher scheduler uses
+        /// the default. Below each stack lies an inaccessible guard zone (Linux: 64 KiB, as clang
+        /// probes large frames only with <c>-fstack-clash-protection</c>), so an overflow faults.
+        /// On Linux a signal handler installed without <c>SA_ONSTACK</c> runs on the stack of the
+        /// task it interrupts and needs room there; the core installs no alternate signal stack.
+        /// Linux shadow stacks (CET, <c>-fcf-protection</c>) are not supported: the fiber switch
+        /// carries no shadow-stack note, so glibc turns them off for the process or refuses it.
+        /// </remarks>
+        std::uint32_t taskStackSize = 0;
     };
 
     extern "C" {
@@ -775,10 +856,37 @@ namespace ThinkMeta::ConcurrentTasks {
     CT_CORE bool ScheduleTimedTask(ITask* task) noexcept;
     }
 
+    // --- asynchronous I/O: the platform's own part of the ABI ---
+    //
+    // Windows: the core owns an I/O completion port and the thread draining it; the caller opens
+    // handles for overlapped I/O, associates them and starts the operations itself. Linux: the
+    // core owns an io_uring and the thread draining it; the caller describes each operation in an
+    // IoRequest and the core submits it, since io_uring has the owner of the ring submit.
+
     namespace AsyncIo {
         extern "C" {
-            // --- asynchronous I/O ---
 
+        /// <summary>Starts the core's asynchronous I/O and the thread that completes it.</summary>
+        /// <returns><c>true</c> if asynchronous I/O is enabled; <c>false</c> only if it could not be started.</returns>
+        /// <remarks>
+        /// Windows: an I/O completion port. Linux: an io_uring, which some environments block (the
+        /// default seccomp profile of Docker, kernels built without it); there it returns
+        /// <c>false</c>, and the schedulers and primitives work as before.
+        /// Calls are counted: only the first one starts it, so a library and the application can
+        /// both enable asynchronous I/O.
+        /// </remarks>
+        /// <seealso cref="DisableAsyncIo"/>
+        CT_CORE bool EnableAsyncIo() noexcept;
+
+        /// <summary>Takes back one <see cref="EnableAsyncIo"/>.</summary>
+        /// <returns><c>true</c> on success; <c>false</c> if asynchronous I/O was not enabled.</returns>
+        /// <remarks>
+        /// The last one stops the asynchronous I/O and its thread, and by then no operation may be
+        /// pending.
+        /// </remarks>
+        CT_CORE bool DisableAsyncIo() noexcept;
+
+#if defined(CT_PLATFORM_WINDOWS)
         /// <summary>Called for every completion packet of an associated handle.</summary>
         /// <param name="overlapped">
         /// The <c>OVERLAPPED</c> the operation was started with; the caller usually embeds it in its own
@@ -794,22 +902,6 @@ namespace ThinkMeta::ConcurrentTasks {
         /// <see cref="AssociateHandleWithIoCompletionPort"/>.
         /// </remarks>
         using IoCompletionRoutine = void (*)(OVERLAPPED* overlapped, DWORD error, DWORD bytesTransferred) noexcept;
-
-        /// <summary>Starts the core's I/O completion port and the thread draining it.</summary>
-        /// <returns><c>true</c> if asynchronous I/O is enabled; <c>false</c> only if they could not be started.</returns>
-        /// <remarks>
-        /// Calls are counted: only the first one starts them, so a library and the application can
-        /// both enable asynchronous I/O.
-        /// </remarks>
-        /// <seealso cref="DisableAsyncIo"/>
-        CT_CORE bool EnableAsyncIo() noexcept;
-
-        /// <summary>Takes back one <see cref="EnableAsyncIo"/>.</summary>
-        /// <returns><c>true</c> on success; <c>false</c> if asynchronous I/O was not enabled.</returns>
-        /// <remarks>
-        /// The last one stops the port and its thread, and by then no operation may be pending.
-        /// </remarks>
-        CT_CORE bool DisableAsyncIo() noexcept;
 
         /// <summary>Associates a file or socket handle with the core's completion port.</summary>
         /// <param name="handle">
@@ -828,6 +920,113 @@ namespace ThinkMeta::ConcurrentTasks {
         /// <seealso cref="IoCompletionRoutine"/>
         /// <seealso cref="EnableAsyncIo"/>
         CT_CORE bool AssociateHandleWithIoCompletionPort(HANDLE handle, IoCompletionRoutine completionRoutine) noexcept;
+#else
+        /// <summary>The operation an <see cref="IoRequest"/> describes.</summary>
+        enum class IoOperation : std::uint8_t {
+            /// <summary><c>pread</c>: <c>length</c> bytes from the file at <c>offset</c> into <c>buffer</c>.</summary>
+            Read,
+            /// <summary><c>pwrite</c>: <c>length</c> bytes from <c>buffer</c> to the file at <c>offset</c>.</summary>
+            Write,
+            /// <summary><c>recv</c> into <c>buffer</c>, at most <c>length</c> bytes, with the <c>MSG_*</c> <c>flags</c>.</summary>
+            Recv,
+            /// <summary><c>send</c> of <c>length</c> bytes from <c>buffer</c>, with the <c>MSG_*</c> <c>flags</c>.</summary>
+            Send,
+            /// <summary><c>recvmsg</c>: <c>buffer</c> is the <c>msghdr</c>, <c>flags</c> the <c>MSG_*</c> flags.</summary>
+            RecvMsg,
+            /// <summary><c>sendmsg</c>: <c>buffer</c> is the <c>msghdr</c>, <c>flags</c> the <c>MSG_*</c> flags.</summary>
+            SendMsg,
+            /// <summary>
+            /// <c>accept4</c>: <c>buffer</c> receives the peer's address (or is <c>nullptr</c>),
+            /// <c>offset</c> is the address of the <c>socklen_t</c> with its size, <c>flags</c> the
+            /// <c>SOCK_*</c> flags of the new socket. The result is the new socket.
+            /// </summary>
+            Accept,
+            /// <summary><c>connect</c> to the address in <c>buffer</c>, which is <c>length</c> bytes long.</summary>
+            Connect,
+        };
+
+        struct IoRequest;
+
+        /// <summary>Called once for every request <see cref="SubmitIo"/> accepted, when it has completed.</summary>
+        /// <param name="request">The request as it was submitted.</param>
+        /// <param name="result">
+        /// What the operation returned: the bytes transferred (or the new socket of
+        /// <see cref="IoOperation::Accept"/>) when it succeeded, else the negated <c>errno</c>
+        /// (<c>-ECANCELED</c> once <see cref="CancelIo"/> or <see cref="CancelAllIo"/> ended it; an
+        /// operation the kernel was already carrying out may report <c>-EINTR</c> instead).
+        /// </param>
+        /// <remarks>Runs on the core's I/O thread.</remarks>
+        using IoCompletionRoutine = void (*)(IoRequest* request, std::int32_t result) noexcept;
+
+        /// <summary>One asynchronous operation, described by the caller and carried out by the core.</summary>
+        /// <remarks>
+        /// Usually the base of the caller's own request object, which the routine casts back to.
+        /// The request, its buffer and whatever <c>offset</c> points to belong to the operation from
+        /// <see cref="SubmitIo"/> until the routine has been called.
+        /// </remarks>
+        struct IoRequest {
+            /// <summary>Called when the operation has completed; required.</summary>
+            IoCompletionRoutine routine;
+            /// <summary>The data, or the structure the operation names (see <see cref="IoOperation"/>).</summary>
+            void* buffer;
+            /// <summary>The file offset of Read and Write; see <see cref="IoOperation"/> for the others; else 0.</summary>
+            std::uint64_t offset;
+            /// <summary>The file or socket.</summary>
+            std::int32_t fd;
+            /// <summary>The number of bytes, or the size of what <c>buffer</c> points to.</summary>
+            std::uint32_t length;
+            /// <summary>The flags of the operation (see <see cref="IoOperation"/>); else 0.</summary>
+            std::uint32_t flags;
+            /// <summary>The operation.</summary>
+            IoOperation operation;
+            /// <summary>Belongs to the core; 0 before the request is submitted.</summary>
+            std::uint8_t reserved8[3];
+            /// <summary>Belongs to the core; 0 before the request is submitted.</summary>
+            std::uint64_t reserved[2];
+        };
+
+        /// <summary>Starts the operation a request describes.</summary>
+        /// <param name="request">The request; required. It belongs to the operation until its routine has been called.</param>
+        /// <returns>
+        /// <c>true</c> if the operation was started: its routine will be called exactly once.
+        /// <c>false</c> if not, with <c>errno</c> set: <c>ENODEV</c> when
+        /// <see cref="EnableAsyncIo"/> has not been called, <c>EAGAIN</c> or <c>EBUSY</c> when the
+        /// kernel takes nothing more for the moment (try again later); the routine is not called.
+        /// </returns>
+        /// <remarks>Callable from any thread.</remarks>
+        /// <seealso cref="CancelIo"/>
+        CT_CORE bool SubmitIo(IoRequest* request) noexcept;
+
+        /// <summary>Asks the kernel to end a submitted operation early.</summary>
+        /// <param name="request">A request <see cref="SubmitIo"/> accepted.</param>
+        /// <returns>
+        /// <c>true</c> if the request to cancel was passed on; <c>false</c> with <c>errno</c> set
+        /// otherwise, as for <see cref="SubmitIo"/>.
+        /// </returns>
+        /// <remarks>
+        /// Does not wait. The operation still completes through its routine, with <c>-ECANCELED</c>
+        /// or, if it had already finished, with its own result; a request that has completed
+        /// already is not affected.
+        /// </remarks>
+        CT_CORE bool CancelIo(IoRequest* request) noexcept;
+
+        /// <summary>Asks the kernel to end every submitted operation on a file or socket early.</summary>
+        /// <param name="fd">The file or socket; must still be open.</param>
+        /// <returns>
+        /// <c>true</c> if the request to cancel was passed on; <c>false</c> with <c>errno</c> set
+        /// otherwise: as for <see cref="CancelIo"/>, <c>EINVAL</c> for a negative <paramref name="fd"/>,
+        /// and <c>EOPNOTSUPP</c> when the kernel cannot cancel by file (before Linux 5.19).
+        /// </returns>
+        /// <remarks>
+        /// The counterpart of <c>CancelIoEx</c> without an <c>OVERLAPPED</c>. Does not wait. Covers the
+        /// operations submitted before the call; each still completes through its routine, with
+        /// <c>-ECANCELED</c> or its own result. Unlike Windows, <c>true</c> does not tell whether any
+        /// operation was pending. Call it before closing <paramref name="fd"/>: closing does not end
+        /// the operations, and the number may then be given to another file.
+        /// </remarks>
+        /// <seealso cref="CancelIo"/>
+        CT_CORE bool CancelAllIo(std::int32_t fd) noexcept;
+#endif
         }
     } // namespace AsyncIo
 

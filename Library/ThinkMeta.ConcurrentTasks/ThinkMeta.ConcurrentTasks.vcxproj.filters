@@ -64,9 +64,6 @@
     <ClCompile Include="Windows\IoCompletionPort.ixx">
       <Filter>Windows</Filter>
     </ClCompile>
-    <ClCompile Include="Windows\IpSocket.ixx">
-      <Filter>Windows</Filter>
-    </ClCompile>
     <ClCompile Include="Windows\VirtualMemory.ixx">
       <Filter>Windows</Filter>
     </ClCompile>
@@ -84,6 +81,42 @@
     </ClCompile>
     <ClCompile Include="Cpp\Padded.ixx">
       <Filter>C++</Filter>
+    </ClCompile>
+    <ClCompile Include="Cpp\Atomic128.ixx">
+      <Filter>C++</Filter>
+    </ClCompile>
+    <ClCompile Include="Platform\Clock.ixx">
+      <Filter>Platform</Filter>
+    </ClCompile>
+    <ClCompile Include="Platform\PlatformThread.ixx">
+      <Filter>Platform</Filter>
+    </ClCompile>
+    <ClCompile Include="Platform\PlatformErrorException.ixx">
+      <Filter>Platform</Filter>
+    </ClCompile>
+    <ClCompile Include="Platform\PlatformError.ixx">
+      <Filter>Platform</Filter>
+    </ClCompile>
+    <ClCompile Include="Platform\PlatformVirtualMemory.ixx">
+      <Filter>Platform</Filter>
+    </ClCompile>
+    <ClCompile Include="Platform\PlatformMutex.ixx">
+      <Filter>Platform</Filter>
+    </ClCompile>
+    <ClCompile Include="Platform\PlatformFileOptions.ixx">
+      <Filter>Platform</Filter>
+    </ClCompile>
+    <ClCompile Include="Platform\PlatformFile.ixx">
+      <Filter>Platform</Filter>
+    </ClCompile>
+    <ClCompile Include="Platform\PlatformSocket.ixx">
+      <Filter>Platform</Filter>
+    </ClCompile>
+    <ClCompile Include="Net\IpSocket.ixx">
+      <Filter>Net</Filter>
+    </ClCompile>
+    <ClCompile Include="Net\TcpSocket.ixx">
+      <Filter>Net</Filter>
     </ClCompile>
     <ClCompile Include="Schedulers\FiberProc.ixx">
       <Filter>Schedulers</Filter>
@@ -122,9 +155,6 @@
       <Filter>WinRT</Filter>
     </ClCompile>
     <ClCompile Include="Windows\Socket.ixx">
-      <Filter>Windows</Filter>
-    </ClCompile>
-    <ClCompile Include="Windows\TcpSocket.ixx">
       <Filter>Windows</Filter>
     </ClCompile>
     <ClCompile Include="AsyncIo\AsyncSocket.ixx">
@@ -170,6 +200,12 @@
     </Filter>
     <Filter Include="C++">
       <UniqueIdentifier>{6dad0e2f-e92b-40a0-94a9-533fac0af687}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Platform">
+      <UniqueIdentifier>{3b7f0c2e-5a1d-4e8b-9c64-2f1a7d9e0b53}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Net">
+      <UniqueIdentifier>{d9c68934-2576-4791-bb45-c7817560b54f}</UniqueIdentifier>
     </Filter>
     <Filter Include="Memory">
       <UniqueIdentifier>{dd235951-acee-49c9-a629-7f6fb158e775}</UniqueIdentifier>

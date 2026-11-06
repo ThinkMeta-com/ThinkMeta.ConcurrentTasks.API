@@ -10,6 +10,7 @@
 module;
 
 #include <array>
+#include <cstddef>
 #include <type_traits>
 
 #include "Defs.h"

@@ -20,7 +20,8 @@ module;
 export module ThinkMeta.ConcurrentTasks.Tasks.Task;
 
 namespace ThinkMeta::ConcurrentTasks::Tasks {
-    template <std::invocable F>
+    // exported like the definition below: a declaration with module linkage cannot be exported later
+    export template <std::invocable F>
     class LambdaTask;
 
     /// <summary>The library's base class for tasks.</summary>
@@ -200,7 +201,7 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
     /// process.
     /// </remarks>
     export template <std::invocable F>
-    class LambdaTask : public Task
+    class LambdaTask final : public Task
     {
     public:
         /// <summary>Stores the callable.</summary>

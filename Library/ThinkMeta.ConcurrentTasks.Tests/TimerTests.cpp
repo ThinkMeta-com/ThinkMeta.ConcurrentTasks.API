@@ -54,6 +54,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 std::atomic<bool>   sleepFailed{false};
                 std::atomic<bool>   sleeperDone{false};
                 std::atomic<double> slept{0.0};
+                ExitCounter         exits; // a task must not go before its OnTaskExited
 
                 ActionTask sleeper([&]() {
                     const auto start = std::chrono::steady_clock::now();
@@ -61,13 +62,13 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                     slept.store(MillisecondsSince(start));
                     otherRanWhileSleeping.store(otherRan.load());
                     sleeperDone.store(true);
-                });
-                ActionTask other([&]() { otherRan.store(true); });
+                }, &exits);
+                ActionTask other([&]() { otherRan.store(true); }, &exits);
 
                 scheduler.AddTask(&sleeper, TaskPriority::Normal);
                 scheduler.AddTask(&other, TaskPriority::Normal);
 
-                Assert::IsTrue(WaitFor([&]() { return sleeperDone.load(); }), L"the sleeping task did not finish");
+                Assert::IsTrue(WaitFor([&]() { return sleeperDone.load() && exits.exits.load() == 2; }), L"the sleeping task did not finish");
                 Assert::IsFalse(sleepFailed.load(), L"SleepFor failed");
                 Assert::IsTrue(otherRanWhileSleeping.load(), L"the other task did not run while the first one slept");
                 Assert::IsTrue(slept.load() >= 50.0, L"the task slept too short");
@@ -79,10 +80,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
         {
             ConvertThreadToTask();
             {
-                constexpr int   TaskCount = 5000;
-                ScopedScheduler scheduler(SchedulerInfo{.numberOfThreads = 4, .taskQueueCapacity = TaskCount});
-                scheduler.Start();
-                TimersOn on;
+                constexpr int TaskCount = 5000;
 
                 std::atomic<int> finished{0};
                 std::atomic<int> tooShort{0};
@@ -98,6 +96,12 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                         finished.fetch_add(1);
                     }));
                 }
+
+                // after the tasks, so that it stops before they go: a task must outlive its
+                // OnTaskExited, which comes after the end of Run that the test waits for
+                ScopedScheduler scheduler(SchedulerInfo{.numberOfThreads = 4, .taskQueueCapacity = TaskCount});
+                scheduler.Start();
+                TimersOn on;
 
                 const auto start = std::chrono::steady_clock::now();
                 for (auto& task : tasks)
@@ -133,7 +137,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 scheduler.Start();
                 TimersOn on;
 
-                ExitCounter         laterExits, cancelledExits, nowExits;
+                ExitCounter         laterExits, cancelledExits, nowExits, plannerExits;
                 std::atomic<int>    laterRuns{0}, cancelledRuns{0}, nowRuns{0};
                 std::atomic<double> laterAfter{0.0};
                 const auto          start = std::chrono::steady_clock::now();
@@ -154,14 +158,16 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                     cancelResult.store(cancelled.Cancel());
                     nowResult.store(now.ScheduleNow());
                     scheduled.store(true);
-                });
+                }, &plannerExits);
                 scheduler.AddTask(&planner, TaskPriority::Normal);
 
                 Assert::IsTrue(WaitFor([&]() { return scheduled.load(); }), L"the planning task did not run");
                 Assert::IsTrue(cancelResult.load(), L"Cancel failed");
                 Assert::IsTrue(nowResult.load(), L"ScheduleNow failed");
 
-                Assert::IsTrue(WaitFor([&]() { return laterExits.exits.load() == 1 && cancelledExits.exits.load() == 1 && nowExits.exits.load() == 1; }),
+                Assert::IsTrue(WaitFor([&]() {
+                    return laterExits.exits.load() == 1 && cancelledExits.exits.load() == 1 && nowExits.exits.load() == 1 && plannerExits.exits.load() == 1;
+                }),
                                L"not every task exited");
                 Assert::AreEqual(1, laterRuns.load(), L"the scheduled task must run");
                 Assert::IsTrue(laterAfter.load() >= 30.0, L"the scheduled task started early");
@@ -185,6 +191,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 std::atomic<int>    eventTimedOut{-1}, eventSignaled{-1}, semaphoreTimedOut{-1}, semaphoreSignaled{-1};
                 std::atomic<double> eventWaited{0.0};
                 std::atomic<bool>   waiting{false};
+                ExitCounter         waiterExits; // the task must not go before its OnTaskExited
 
                 ActionTask waiter([&]() {
                     // nobody sets the event: the wait times out
@@ -199,14 +206,14 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                     semaphoreTimedOut.store(static_cast<int>(semaphore.Wait(Duration::Milliseconds(10))));
                     semaphore.Release();
                     semaphoreSignaled.store(static_cast<int>(semaphore.Wait(Duration::Seconds(10))));
-                });
+                }, &waiterExits);
                 scheduler.AddTask(&waiter, TaskPriority::Normal);
 
                 Assert::IsTrue(WaitFor([&]() { return waiting.load(); }), L"the waiting task did not get to its second wait");
                 Sleep(20); // let it suspend
                 event.Set();
 
-                Assert::IsTrue(WaitFor([&]() { return semaphoreSignaled.load() != -1; }), L"the waiting task did not finish");
+                Assert::IsTrue(WaitFor([&]() { return waiterExits.exits.load() == 1; }), L"the waiting task did not finish");
                 Assert::AreEqual(static_cast<int>(WaitStatus::TimedOut), eventTimedOut.load(), L"an event nobody sets must time out");
                 Assert::IsTrue(eventWaited.load() >= 30.0, L"the event wait timed out early");
                 Assert::AreEqual(static_cast<int>(WaitStatus::Signaled), eventSignaled.load(), L"a set event must end the wait");
@@ -236,17 +243,18 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 } slow;
 
                 std::atomic<int> firstWait{-1}, secondWait{-1};
+                ExitCounter      waiterExits; // the task must not go before its OnTaskExited
 
                 ActionTask waiter([&]() {
                     firstWait.store(static_cast<int>(slow.Wait(Duration::Milliseconds(20)))); // still running
                     slow.release.store(true);
                     secondWait.store(static_cast<int>(slow.Wait(Duration::Seconds(10))));
-                });
+                }, &waiterExits);
 
                 scheduler.AddTask(&slow, TaskPriority::Normal);
                 scheduler.AddTask(&waiter, TaskPriority::Normal);
 
-                Assert::IsTrue(WaitFor([&]() { return secondWait.load() != -1; }), L"the waiting task did not finish");
+                Assert::IsTrue(WaitFor([&]() { return waiterExits.exits.load() == 1; }), L"the waiting task did not finish");
                 Assert::AreEqual(static_cast<int>(WaitStatus::TimedOut), firstWait.load(), L"waiting for a running task must time out");
                 Assert::AreEqual(static_cast<int>(WaitStatus::Signaled), secondWait.load(), L"waiting for a task that exits must succeed");
             }
@@ -266,6 +274,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
                 std::atomic<int>  eventWait{-1}, requested{-1}, semaphoreWait{-1}, plainWait{-1};
                 std::atomic<bool> waiting{false};
+                ExitCounter       waiterExits; // the task must not go before its OnTaskExited
 
                 ActionTask waiter([&]() {
                     waiting.store(true);
@@ -278,7 +287,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                     // Wait() has no cancel: it passes only once the event is set
                     event.Wait();
                     plainWait.store(1);
-                });
+                }, &waiterExits);
                 scheduler.AddTask(&waiter, TaskPriority::Normal);
 
                 Assert::IsTrue(WaitFor([&]() { return waiting.load(); }), L"the waiting task did not start");
@@ -289,7 +298,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 Sleep(20);
                 Assert::AreEqual(-1, plainWait.load(), L"Wait() must not end on a cancel");
                 event.Set();
-                Assert::IsTrue(WaitFor([&]() { return plainWait.load() == 1; }), L"Wait() did not end on Set");
+                Assert::IsTrue(WaitFor([&]() { return plainWait.load() == 1 && waiterExits.exits.load() == 1; }), L"Wait() did not end on Set");
 
                 semaphore.Release();
                 Assert::IsTrue(semaphore.TryWait(), L"a cancelled wait took the permit");

@@ -2,7 +2,8 @@
 // Copyright (c) 2026 ThinkMeta Software GmbH
 //
 // Win32 error codes as the library reports them: the Error helper (named codes and predicates),
-// the ErrorCode alias, and ErrorException for code paths that cannot return an error.
+// the ErrorCode alias, and ErrorException for code paths that cannot return an error (the class
+// itself is shared by all platforms, Platform\PlatformErrorException.ixx).
 //
 // Preliminary API: everything in this file is subject to change.
 //
@@ -12,6 +13,8 @@ module;
 #include <Windows.h>
 
 export module ThinkMeta.ConcurrentTasks.Windows.Error;
+
+export import ThinkMeta.ConcurrentTasks.Platform.ErrorException;
 
 namespace ThinkMeta::ConcurrentTasks::Windows {
     /// <summary>Names and predicates for Win32 error codes.</summary>
@@ -44,6 +47,8 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         static constexpr Type NotEnoughMemory   = ERROR_NOT_ENOUGH_MEMORY;
         static constexpr Type InvalidParameter  = ERROR_INVALID_PARAMETER;
         static constexpr Type NotFound          = ERROR_NOT_FOUND;
+        static constexpr Type FileNotFound      = ERROR_FILE_NOT_FOUND;
+        static constexpr Type WriteFault        = ERROR_WRITE_FAULT;
         static constexpr Type OperationAborted  = ERROR_OPERATION_ABORTED;
 
         /// <summary><c>ERROR_TIMEOUT</c>: an operation with a timeout ran out of time.</summary>
@@ -116,57 +121,11 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
     /// <typeparam name="_Error">
     /// The error helper that names the codes: <see cref="Error"/> (Win32) or <see cref="WinsockError"/> (Winsock).
     /// </typeparam>
-    /// <remarks>
-    /// With C++ exceptions enabled <see cref="Throw"/> throws it; without them (<c>/EHs-</c> etc., as
-    /// in the CRT-free core) Throw ends the process.
-    /// In code that cannot pass exceptions on (noexcept functions, such as most of the library)
-    /// <see cref="ThrowIfFailed"/> ends the process: there it is a fail-fast check.
-    /// </remarks>
+    /// <remarks>The class is shared by all platforms, see <see cref="Platform::_ErrorException"/>.</remarks>
     /// <seealso cref="ErrorException"/>
     /// <seealso cref="WinsockErrorException"/>
     export template <typename _Error>
-    class _ErrorException
-    {
-    public:
-        /// <summary>The error code type the exception carries.</summary>
-        using Code = typename _Error::Type;
-
-        /// <summary>Constructs the exception for <paramref name="errorCode"/>.</summary>
-        /// <param name="errorCode">The error code to carry; normally a failure code.</param>
-        explicit _ErrorException(Code errorCode) noexcept : errorCode_{errorCode} {}
-
-        /// <summary>Returns the error code the exception carries.</summary>
-        /// <returns>The code passed to the constructor.</returns>
-        Code GetErrorCode() const noexcept { return errorCode_; }
-
-        /// <summary>Throws the exception for <paramref name="errorCode"/>.</summary>
-        /// <param name="errorCode">The error code the exception carries.</param>
-        /// <remarks>Built without exceptions, it ends the process instead.</remarks>
-        /// <seealso cref="ThrowIfFailed"/>
-#ifdef _CPPUNWIND
-        [[noreturn]] static void Throw(Code errorCode) { throw _ErrorException(errorCode); }
-#else
-        // Built without exceptions, as the CRT-free core is: there is nothing to unwind, so a
-        // failure the caller cannot be told about ends the process right here.
-        [[noreturn]] static void Throw([[maybe_unused]] Code errorCode) noexcept { __fastfail(FAST_FAIL_FATAL_APP_EXIT); }
-#endif
-
-        /// <summary>Calls <see cref="Throw"/> unless the code means success.</summary>
-        /// <param name="errorCode">The error code to check.</param>
-        /// <remarks>Built without exceptions, a failure ends the process instead.</remarks>
-#ifdef _CPPUNWIND
-        static void ThrowIfFailed(Code errorCode)
-#else
-        static void ThrowIfFailed(Code errorCode) noexcept
-#endif
-        {
-            if (_Error::Failed(errorCode))
-                Throw(errorCode);
-        }
-
-    private:
-        const Code errorCode_;
-    };
+    using _ErrorException = Platform::_ErrorException<_Error>;
 
     /// <summary>Carries a Win32 error out of code that has no error return.</summary>
     /// <remarks>See <see cref="_ErrorException"/>.</remarks>

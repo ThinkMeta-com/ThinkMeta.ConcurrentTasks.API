@@ -9,12 +9,17 @@
 
 module;
 
-#include <Windows.h>
+#include "Defs.h"
+
+#if defined(CT_PLATFORM_WINDOWS)
+#    include <Windows.h>
+#else
+#    include <sys/mman.h>
+#endif
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
-
-#include "Defs.h"
 
 export module ThinkMeta.ConcurrentTasks.Collections.BoundedPointerQueue;
 
@@ -47,7 +52,7 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
         ~_BoundedPointerQueue() noexcept
         {
             if (ring_.nodes)
-                VirtualFree(ring_.nodes, 0, MEM_RELEASE);
+                FreeNodes(ring_.nodes, ring_.capacity);
         }
 
         _BoundedPointerQueue(const _BoundedPointerQueue&)            = delete;
@@ -65,9 +70,9 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
             CT_ASSERT(!ring_.nodes);
             CT_ASSERT(capacity >= 2 && (capacity & (capacity - 1)) == 0);
 
-            // VirtualAlloc hands out zeroed, page-aligned memory, so every node starts empty (sequence 0)
-            // on its own cache line, and pages nobody touches cost no physical memory.
-            auto* nodes = static_cast<Node*>(VirtualAlloc(nullptr, capacity * sizeof(Node), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+            // Pages straight from the system are zeroed and page-aligned, so every node starts empty
+            // (sequence 0) on its own cache line, and pages nobody touches cost no physical memory.
+            auto* nodes = AllocateNodes(capacity);
             if (!nodes)
                 return false;
 
@@ -202,8 +207,12 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
 
     private:
         /// <summary>One slot of the queue.</summary>
-        /// <remarks>Contains the pointer value and a sequence number for ABA prevention.</remarks>
-        struct _Node {
+        /// <remarks>
+        /// Contains the pointer value and a sequence number for ABA prevention. Aligned to its
+        /// size, 16 bytes: only then may the compiler change it with one cmpxchg16b instead of a
+        /// call into an atomics library (clang would call libatomic, MSVC checks it at run time).
+        /// </remarks>
+        struct alignas(16) _Node {
             /// <summary>Pointer value stored in the node.</summary>
             T* value;
 
@@ -216,6 +225,27 @@ namespace ThinkMeta::ConcurrentTasks::Collections {
 
         static_assert(sizeof(Node) == CT_CACHE_LINE_SIZE, "Node size must be aligned to avoid false sharing");
         static_assert(std::atomic_ref<_Node>::is_always_lock_free);
+
+        // Zeroed, page-aligned memory straight from the system; nullptr if there is none. Not
+        // through the heap: this module is also built into the core, which has none.
+        static Node* AllocateNodes(std::size_t capacity) noexcept
+        {
+#if defined(CT_PLATFORM_WINDOWS)
+            return static_cast<Node*>(VirtualAlloc(nullptr, capacity * sizeof(Node), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+#else
+            void* nodes = mmap(nullptr, capacity * sizeof(Node), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            return nodes == MAP_FAILED ? nullptr : static_cast<Node*>(nodes);
+#endif
+        }
+
+        static void FreeNodes(Node* nodes, [[maybe_unused]] std::size_t capacity) noexcept
+        {
+#if defined(CT_PLATFORM_WINDOWS)
+            VirtualFree(nodes, 0, MEM_RELEASE);
+#else
+            munmap(nodes, capacity * sizeof(Node));
+#endif
+        }
 
         /// <summary>Where the ring lives and how an index maps onto it.</summary>
         /// <remarks>

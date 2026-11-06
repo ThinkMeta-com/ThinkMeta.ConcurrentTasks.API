@@ -1,9 +1,6 @@
-// Async file copy: a task copies a file with overlapped reads and writes on the
-// core's I/O completion port - the read of the next block runs while the current
-// block is being written.
-#define NOMINMAX
-#include <Windows.h>
-
+// Async file copy: a task copies a file with asynchronous reads and writes through
+// the core (an I/O completion port on Windows, io_uring on Linux) - the read of the
+// next block runs while the current block is being written.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -15,17 +12,25 @@
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncFile;
 import ThinkMeta.ConcurrentTasks.Tasks.WaitableTask;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::AsyncFile;
 using TC::AsyncIo::WaitableAsyncFileIoRequest_s;
-using TC::Windows::Error;
-using TC::Windows::ErrorCode;
+using TC::Platform::Error;
+using TC::Platform::ErrorCode;
+using ByteCount = AsyncFile::ByteCount;
 
 // not a multiple of the block size
 constexpr std::uint64_t FileSize  = 8 * 1024 * 1024 + 123;
-constexpr DWORD         BlockSize = 1024 * 1024;
+constexpr ByteCount     BlockSize = 1024 * 1024;
+
+// How the files are opened: written from scratch, or an existing file read.
+constexpr TC::Platform::FileOptions ToWrite{
+    .access   = TC::Platform::FileAccess::Write,
+    .creation = TC::Platform::FileCreation::CreateAlways};
+constexpr TC::Platform::FileOptions
+    ToRead{}; // the default: an existing file, for reading
 
 std::byte Pattern(std::uint64_t offset) noexcept
 {
@@ -36,22 +41,21 @@ std::byte Pattern(std::uint64_t offset) noexcept
 // Writes the source file block by block. Write suspends the calling task until the
 // write has completed; every call names its file offset, since the handle has no
 // file pointer.
-ErrorCode CreateSource(const wchar_t* path) noexcept
+ErrorCode CreateSource(TC::Platform::FileName path) noexcept
 {
-    AsyncFile file;
-    ErrorCode error
-        = file.Create(path, GENERIC_WRITE, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL);
+    AsyncFile              file;
+    ErrorCode              error = file.Create(path, ToWrite);
     std::vector<std::byte> block(BlockSize);
     for (std::uint64_t offset = 0; Error::Succeeded(error) && offset < FileSize;
          offset += BlockSize) {
-        const auto bytes = static_cast<DWORD>(
+        const auto bytes = static_cast<ByteCount>(
             std::min<std::uint64_t>(BlockSize, FileSize - offset));
-        for (DWORD i = 0; i < bytes; ++i)
+        for (ByteCount i = 0; i < bytes; ++i)
             block[i] = Pattern(offset + i);
-        DWORD written = 0;
-        error         = file.Write(block.data(), bytes, written, offset);
+        ByteCount written = 0;
+        error             = file.Write(block.data(), bytes, written, offset);
         if (Error::Succeeded(error) && written != bytes)
-            error = ERROR_WRITE_FAULT;
+            error = Error::WriteFault;
     }
     return error;
 }
@@ -60,15 +64,14 @@ ErrorCode CreateSource(const wchar_t* path) noexcept
 // [copy]
 // Two buffers: while the block in one buffer is being written, the next block is
 // read into the other one.
-ErrorCode Copy(const wchar_t* sourcePath, const wchar_t* targetPath) noexcept
+ErrorCode Copy(TC::Platform::FileName sourcePath,
+               TC::Platform::FileName targetPath) noexcept
 {
     AsyncFile source;
     AsyncFile target;
-    ErrorCode error = source.Create(sourcePath, GENERIC_READ, FILE_SHARE_READ,
-                                    OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN);
+    ErrorCode error = source.Create(sourcePath, ToRead);
     if (Error::Succeeded(error))
-        error = target.Create(targetPath, GENERIC_WRITE, 0, CREATE_ALWAYS,
-                              FILE_ATTRIBUTE_NORMAL);
+        error = target.Create(targetPath, ToWrite);
     AsyncFile::FileSize size = 0;
     if (Error::Succeeded(error))
         error = source.GetSize(size);
@@ -82,9 +85,9 @@ ErrorCode Copy(const wchar_t* sourcePath, const wchar_t* targetPath) noexcept
 
     for (std::uint64_t offset = 0, block = 0; offset < size;
          offset += BlockSize, ++block) {
-        const std::size_t i = block % 2;
-        const auto        bytes
-            = static_cast<DWORD>(std::min<std::uint64_t>(BlockSize, size - offset));
+        const std::size_t i     = block % 2;
+        const auto        bytes = static_cast<ByteCount>(
+            std::min<std::uint64_t>(BlockSize, size - offset));
 
         // The buffer is free once the write from it has completed.
         if (writing[i]) {
@@ -97,10 +100,10 @@ ErrorCode Copy(const wchar_t* sourcePath, const wchar_t* targetPath) noexcept
 
         // Suspends this task until the block is read; the write from the other
         // buffer goes on meanwhile.
-        DWORD read = 0;
-        error      = source.Read(buffers[i].data(), bytes, read, offset);
+        ByteCount read = 0;
+        error          = source.Read(buffers[i].data(), bytes, read, offset);
         if (Error::Succeeded(error) && read != bytes)
-            error = ERROR_HANDLE_EOF;
+            error = Error::EndOfFile;
         if (Error::Failed(error))
             break;
 
@@ -130,23 +133,22 @@ ErrorCode Copy(const wchar_t* sourcePath, const wchar_t* targetPath) noexcept
 
 // Reads both files with Read (suspending, explicit offsets) and compares them with
 // the pattern.
-bool Verify(const wchar_t* path) noexcept
+bool Verify(TC::Platform::FileName path) noexcept
 {
     AsyncFile           file;
     AsyncFile::FileSize size = 0;
-    if (Error::Failed(file.Create(path, GENERIC_READ, FILE_SHARE_READ,
-                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL))
+    if (Error::Failed(file.Create(path, ToRead))
         || Error::Failed(file.GetSize(size)) || size != FileSize)
         return false;
     std::vector<std::byte> block(BlockSize);
     for (std::uint64_t offset = 0; offset < size; offset += BlockSize) {
-        const auto bytes
-            = static_cast<DWORD>(std::min<std::uint64_t>(BlockSize, size - offset));
-        DWORD read = 0;
+        const auto bytes = static_cast<ByteCount>(
+            std::min<std::uint64_t>(BlockSize, size - offset));
+        ByteCount read = 0;
         if (Error::Failed(file.Read(block.data(), bytes, read, offset))
             || read != bytes)
             return false;
-        for (DWORD i = 0; i < bytes; ++i) {
+        for (ByteCount i = 0; i < bytes; ++i) {
             if (block[i] != Pattern(offset + i))
                 return false;
         }
@@ -160,7 +162,7 @@ bool Verify(const wchar_t* path) noexcept
 class CopyTask : public TC::Tasks::WaitableTask_s
 {
 public:
-    CopyTask(const wchar_t* source, const wchar_t* target) noexcept
+    CopyTask(TC::Platform::FileName source, TC::Platform::FileName target) noexcept
         : source_(source),
           target_(target)
     {}
@@ -177,22 +179,22 @@ public:
     bool      verified = false;
 
 private:
-    const wchar_t* source_;
-    const wchar_t* target_;
+    TC::Platform::FileName source_;
+    TC::Platform::FileName target_;
 };
 // [/task]
 
 int main()
 {
     const std::filesystem::path source = std::filesystem::temp_directory_path()
-        / L"ConcurrentTasks-copy-source.bin";
+        / "ConcurrentTasks-copy-source.bin";
     const std::filesystem::path target = std::filesystem::temp_directory_path()
-        / L"ConcurrentTasks-copy-target.bin";
+        / "ConcurrentTasks-copy-target.bin";
 
     // [run]
     TC::ConvertThreadToTask();
-    // Before the first AsyncFile is created: it associates its handle with the
-    // core's completion port.
+    // Before the first AsyncFile is created: on Windows it associates its handle
+    // with the core's completion port.
     if (!TC::AsyncIo::EnableAsyncIo())
         return 1;
 
@@ -214,7 +216,8 @@ int main()
     TC::ConvertTaskToThread();
     // [/run]
 
-    std::printf("Copied %llu bytes: %s, %s\n", FileSize,
+    std::printf("Copied %llu bytes: %s, %s\n",
+                static_cast<unsigned long long>(FileSize),
                 task.error == Error::Success ? "no error" : "FAILED",
                 task.verified ? "verified" : "NOT VERIFIED");
     std::error_code ignored;

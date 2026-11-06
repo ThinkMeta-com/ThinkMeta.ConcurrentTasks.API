@@ -11,6 +11,8 @@ module;
 
 #include <Windows.h>
 
+#include "Defs.h"
+
 #include <cstddef>
 
 export module ThinkMeta.ConcurrentTasks.Windows.VirtualMemory;
@@ -109,8 +111,20 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <seealso cref="Decommit"/>
         static ErrorCode Commit(void* address, std::size_t size, DWORD protection) noexcept
         {
+            CT_ASSERT(size != 0); // as on Linux; Windows would commit nothing and fail
             return Error::GetError(VirtualAlloc(address, size, MEM_COMMIT, protection) != nullptr);
         }
+
+        /// <summary>Commits pages for reading and writing (<c>MEM_COMMIT</c>, <c>PAGE_READWRITE</c>).</summary>
+        /// <param name="address">Start of the range; rounded down to a page boundary.</param>
+        /// <param name="size">Length of the range in bytes; every page it touches is committed.</param>
+        /// <returns><see cref="Error::Success"/> (<c>0</c>) on success; otherwise the Win32 error code.</returns>
+        /// <remarks>
+        /// The range must lie inside an existing reservation. The form portable code uses
+        /// (<see cref="Platform::VirtualMemory"/>).
+        /// </remarks>
+        /// <seealso cref="Decommit"/>
+        static ErrorCode Commit(void* address, std::size_t size) noexcept { return Commit(address, size, PAGE_READWRITE); }
 
         /// <summary>Decommits pages (<c>MEM_DECOMMIT</c>).</summary>
         /// <param name="address">Start of the range; rounded down to a page boundary.</param>
@@ -118,7 +132,11 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         /// <returns><see cref="Error::Success"/> (<c>0</c>) on success; otherwise the Win32 error code.</returns>
         /// <remarks>The address range stays reserved.</remarks>
         /// <seealso cref="Commit"/>
-        static ErrorCode Decommit(void* address, std::size_t size) noexcept { return Error::GetError(VirtualFree(address, size, MEM_DECOMMIT)); }
+        static ErrorCode Decommit(void* address, std::size_t size) noexcept
+        {
+            CT_ASSERT(size != 0); // 0 would decommit the whole region the address lies in
+            return Error::GetError(VirtualFree(address, size, MEM_DECOMMIT));
+        }
 
         /// <summary>Locks pages into physical memory (<c>VirtualLock</c>).</summary>
         /// <param name="address">Start of the range; the pages must be committed.</param>

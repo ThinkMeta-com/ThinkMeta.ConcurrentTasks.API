@@ -1,15 +1,14 @@
 // Guide "Pipes": SpscVirtualMemoryPipe between a producer and a consumer, written
 // by hand on one side and by AsyncFile::WriteFile / AsyncFile::ReadFile on the
-// other. Uses a file in %TEMP% that it deletes; checks its own results outside the
-// regions that the guide shows.
-#define NOMINMAX
-#include <Windows.h>
-
+// other. Uses a file in the temp directory that it deletes; checks its own results
+// outside the regions that the guide shows.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
 
 // [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
@@ -17,12 +16,12 @@ import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.Memory.SpscVirtualMemoryPipe;
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncFile;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::Memory::IReadSequentialMemory;
 using TC::Memory::IWriteSequentialMemory;
-using TC::Windows::Error;
+using TC::Platform::Error;
 // [/names]
 
 // [sample]
@@ -91,11 +90,8 @@ bool SumSamples(IReadSequentialMemory& in, double& sum) noexcept
 
 int main()
 {
-    wchar_t     path[MAX_PATH];
-    const DWORD length = GetTempPathW(MAX_PATH, path);
-    if (length == 0 || length + 32 > MAX_PATH)
-        return 1;
-    lstrcatW(path, L"ct-guide-pipes.bin");
+    const std::filesystem::path path
+        = std::filesystem::temp_directory_path() / "ct-guide-pipes.bin";
 
     TC::ConvertThreadToTask();
     if (!TC::AsyncIo::EnableAsyncIo())
@@ -118,8 +114,11 @@ int main()
     helpers.AddTask(&producer);
     scheduler->AddTask(&producer);
 
-    const auto written = TC::AsyncIo::AsyncFile::WriteFile(
-        path, GENERIC_WRITE, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, &toFile);
+    constexpr TC::Platform::FileOptions create{
+        .access   = TC::Platform::FileAccess::Write,
+        .creation = TC::Platform::FileCreation::CreateAlways};
+    const auto written
+        = TC::AsyncIo::AsyncFile::WriteFile(path.c_str(), create, &toFile);
     helpers.Wait();
     // [/to-file]
     std::printf("pipe to file:  %s\n", Error::Succeeded(written) ? "ok" : "failed");
@@ -140,8 +139,7 @@ int main()
 
     TC::AsyncIo::BulkIoOptions options; // 5 reads of 1 MB in flight by default
     const auto                 read = TC::AsyncIo::AsyncFile::ReadFile(
-        path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
-        FILE_FLAG_SEQUENTIAL_SCAN, &fromFile, options);
+        path.c_str(), TC::Platform::FileOptions{}, &fromFile, options);
     helpers.Wait();
     // [/from-file]
 
@@ -157,7 +155,8 @@ int main()
     scheduler->Destroy();
     TC::AsyncIo::DisableAsyncIo();
     TC::ConvertTaskToThread();
-    DeleteFileW(path);
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
     std::printf(ok ? "OK\n" : "FAILED\n");
     return ok ? 0 : 1;
 }

@@ -12,11 +12,11 @@ import ThinkMeta.ConcurrentTasks.Synchronization.Semaphore;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Tasks.WaitableTask;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::AsyncFile;
-using TC::Windows::Error;
+using TC::Platform::Error;
 using namespace Tutorial;
 // [/names]
 
@@ -65,9 +65,8 @@ public:
     bool Pack(TC::ITaskScheduler& scheduler, const Arguments& arguments,
               std::size_t slotCount)
     {
-        if (Error::Failed(input_.Create(arguments.input, GENERIC_READ,
-                                        FILE_SHARE_READ, OPEN_EXISTING,
-                                        FILE_FLAG_SEQUENTIAL_SCAN)))
+        if (Error::Failed(
+                input_.Create(arguments.input, TC::Platform::FileOptions{})))
             return false;
         File output = File::Create(arguments.output);
         if (!output.IsOpen())
@@ -105,12 +104,13 @@ public:
     {
         for (std::size_t block = 0;; ++block) {
             freeSlots_.Wait(); // at most slotCount blocks in flight
-            Slot&               slot   = slots_[block % slotCount_];
-            const std::uint64_t offset = std::uint64_t{slot.buffer.size()} * block;
-            DWORD               read   = 0; // DWORD: Read's out parameter
-            const auto          error
+            Slot&                slot   = slots_[block % slotCount_];
+            const std::uint64_t  offset = std::uint64_t{slot.buffer.size()} * block;
+            AsyncFile::ByteCount read   = 0;
+            const auto           error
                 = input_.Read(slot.buffer.data(),
-                              static_cast<DWORD>(slot.buffer.size()), read, offset);
+                              static_cast<AsyncFile::ByteCount>(slot.buffer.size()),
+                              read, offset);
             if (Error::Failed(error) && error != Error::EndOfFile)
                 readOk_ = false; // read is 0: the pipeline ends here
             slot.size = read;
@@ -147,7 +147,7 @@ void ReaderTask::Run() noexcept
 }
 
 // [main]
-int wmain(int argc, wchar_t* argv[])
+int main(int argc, char* argv[])
 {
     Arguments arguments;
     if (!ParseArguments(argc, argv, arguments))
@@ -156,10 +156,9 @@ int wmain(int argc, wchar_t* argv[])
     // Enough blocks in flight to keep every thread busy while the reader and
     // the writer catch up. At most this many encode tasks are runnable, so the
     // default queue capacity is enough again.
-    const std::uint32_t threads   = arguments.threads != 0
-        ? arguments.threads
-        : GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-    const std::size_t   slotCount = std::size_t{4} * threads;
+    const std::uint32_t threads
+        = arguments.threads != 0 ? arguments.threads : ProcessorCount();
+    const std::size_t slotCount = std::size_t{4} * threads;
 
     TC::ConvertThreadToTask();
     if (!TC::AsyncIo::EnableAsyncIo())

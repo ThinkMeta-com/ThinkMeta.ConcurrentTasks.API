@@ -1,8 +1,5 @@
 // Wait for a group: fork many short tasks, join them with a TaskGroup, then reuse
 // the group for a second round of tasks built from lambdas.
-#define NOMINMAX
-#include <Windows.h>
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -20,7 +17,7 @@ namespace TC = ThinkMeta::ConcurrentTasks;
 // [sum-task]
 // One part of the work: sums a slice of the array. The result stays in the object,
 // so the object has to live at least until the group has been waited for.
-class SumTask : public TC::Tasks::Task
+class SumTask final : public TC::Tasks::Task
 {
 public:
     void Run() noexcept override

@@ -16,6 +16,7 @@ module;
 export module ThinkMeta.ConcurrentTasks.Windows.File;
 
 export import ThinkMeta.ConcurrentTasks.Windows.Error;
+export import ThinkMeta.ConcurrentTasks.Platform.FileOptions;
 
 namespace ThinkMeta::ConcurrentTasks::Windows {
     /// <summary>Owns one Win32 file handle and closes it on destruction.</summary>
@@ -165,6 +166,60 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
 
             handle_ = ::CreateFileW(fileName, desiredAccess, shareMode, securityAttributes, creationDisposition, flagsAndAttributes, templateFile);
             return IsValid() ? Error::Success : Error::GetLastError();
+        }
+
+        /// <summary>Opens or creates a file as <paramref name="options"/> says (<c>CreateFileW</c>).</summary>
+        /// <param name="fileName">Path of the file; must not be <c>nullptr</c>.</param>
+        /// <param name="options">How to open it, as on every platform.</param>
+        /// <param name="flags">More <c>FILE_FLAG_*</c> values, such as <c>FILE_FLAG_OVERLAPPED</c>; default none.</param>
+        /// <returns><c>ERROR_SUCCESS</c>, or the Win32 error code of the failed call.</returns>
+        /// <remarks>Precondition: no handle is held. On failure the object holds no handle.</remarks>
+        /// <seealso cref="FlagsOf"/>
+        ErrorCode Create(const FileName& fileName, const Platform::FileOptions& options, DWORD flags = 0) noexcept
+        {
+            DWORD access, shareMode, creationDisposition, flagsAndAttributes;
+            FlagsOf(options, access, shareMode, creationDisposition, flagsAndAttributes);
+            return Create(fileName, access, shareMode, nullptr, creationDisposition, flagsAndAttributes | flags, nullptr);
+        }
+
+        /// <summary>The arguments of <c>CreateFileW</c> that <paramref name="options"/> stands for.</summary>
+        /// <param name="options">How to open a file.</param>
+        /// <param name="access">Receives <c>GENERIC_READ</c>, <c>GENERIC_WRITE</c> or both.</param>
+        /// <param name="shareMode">Receives the <c>FILE_SHARE_*</c> values.</param>
+        /// <param name="creationDisposition">Receives <c>OPEN_EXISTING</c>, <c>CREATE_ALWAYS</c>, ...</param>
+        /// <param name="flagsAndAttributes">Receives <c>FILE_ATTRIBUTE_NORMAL</c>, with <c>FILE_FLAG_NO_BUFFERING</c> if asked for.</param>
+        static void FlagsOf(const Platform::FileOptions& options, DWORD& access, DWORD& shareMode, DWORD& creationDisposition,
+                            DWORD& flagsAndAttributes) noexcept
+        {
+            using Platform::FileAccess;
+            using Platform::FileCreation;
+
+            access = options.access == FileAccess::Read    ? GENERIC_READ
+                   : options.access == FileAccess::Write ? GENERIC_WRITE
+                                                           : GENERIC_READ | GENERIC_WRITE;
+
+            shareMode = (options.shareRead ? FILE_SHARE_READ : 0) | (options.shareWrite ? FILE_SHARE_WRITE : 0);
+
+            switch (options.creation) {
+                case FileCreation::OpenExisting:
+                    creationDisposition = OPEN_EXISTING;
+                    break;
+                case FileCreation::CreateAlways:
+                    creationDisposition = CREATE_ALWAYS;
+                    break;
+                case FileCreation::CreateNew:
+                    creationDisposition = CREATE_NEW;
+                    break;
+                case FileCreation::OpenAlways:
+                    creationDisposition = OPEN_ALWAYS;
+                    break;
+                case FileCreation::TruncateExisting:
+                default:
+                    creationDisposition = TRUNCATE_EXISTING;
+                    break;
+            }
+
+            flagsAndAttributes = FILE_ATTRIBUTE_NORMAL | (options.unbuffered ? FILE_FLAG_NO_BUFFERING : 0);
         }
 
         /// <summary><c>DeleteFileW</c>.</summary>

@@ -2,8 +2,6 @@
 // Semaphore_s as a counter of items, CriticalSection (recursive) with
 // CriticalSectionLock and the spinning guard. Checks its own results outside the
 // regions that the guide shows.
-#include <Windows.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>

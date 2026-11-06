@@ -1,16 +1,20 @@
-ThinkMeta.ConcurrentTasks.Core.dll - terms of use
-=================================================
+ThinkMeta.ConcurrentTasks core - terms of use
+=============================================
 
 Copyright (c) 2026 ThinkMeta Software GmbH. All rights reserved.
 
-These terms cover bin\x64\Release\ThinkMeta.ConcurrentTasks.Core.dll, the scheduler core of
-ThinkMeta.ConcurrentTasks, and its import library lib\x64\Release\ThinkMeta.ConcurrentTasks.Core.lib
+These terms cover the core binaries of ThinkMeta.ConcurrentTasks, the scheduler core:
+
+    bin\win-x64\ThinkMeta.ConcurrentTasks.Core.dll              (Windows)
+    lib\win-x64\ThinkMeta.ConcurrentTasks.Core.lib              (Windows, its import library)
+    bin\linux-x64\libThinkMeta.ConcurrentTasks.Core.so.2        (Linux)
+
 (together "the Software"). The Software is proprietary and is not covered by the MIT license of
 the other files in this repository.
 
 1. You may use the Software free of charge for private and non-commercial purposes, including
    building and running your own programs that use it, and distributing such programs together
-   with the unchanged DLL for private and non-commercial use.
+   with the unchanged DLL or shared library for private and non-commercial use.
 
 2. Benchmarks: regardless of point 1, anyone may run benchmark tests of any kind with the
    Software, on any hardware and for any purpose, commercial evaluation included, and publish

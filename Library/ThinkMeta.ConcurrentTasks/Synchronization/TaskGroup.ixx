@@ -10,6 +10,7 @@ module;
 
 #include <atomic>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
@@ -19,6 +20,7 @@ module;
 export module ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 
 import ThinkMeta.ConcurrentTasks.Synchronization.Waitable;
+import ThinkMeta.ConcurrentTasks.Platform.Thread;
 
 namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// <summary>The task counter of <see cref="TaskGroup"/> / <see cref="TaskGroup_s"/>.</summary>
@@ -72,9 +74,9 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
             // up in case the notifying thread was preempted.
             for (std::uint32_t spins = 0; notifying_.load(std::memory_order_acquire); ++spins) {
                 if (spins < 64)
-                    YieldProcessor();
+                    CT_PAUSE();
                 else
-                    SwitchToThread();
+                    Platform::Thread::YieldThread();
             }
         }
 
@@ -104,7 +106,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// </remarks>
     /// <seealso cref="ITask"/>
     export template <SuspensionKind _SuspensionKind>
-    class _TaskGroup : public TaskGroupBase, public Waitable<_SuspensionKind, _TaskGroup<_SuspensionKind>>
+    class _TaskGroup final : public TaskGroupBase, public Waitable<_SuspensionKind, _TaskGroup<_SuspensionKind>>
     {
     public:
         /// <summary>A resumed waiter looks at the count again (see <see cref="Waitable"/>).</summary>

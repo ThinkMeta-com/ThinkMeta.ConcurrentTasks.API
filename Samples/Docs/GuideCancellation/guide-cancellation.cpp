@@ -3,13 +3,19 @@
 // start, and a sleep cut short. The first three cases run without timers. Uses
 // 127.0.0.1 and an ephemeral port; checks its own results outside the regions that
 // the guide shows.
-#include <WinSock2.h>
-#include <Windows.h>
+// sockaddr_in, htonl, INADDR_LOOPBACK
+#if defined(_WIN32)
+#    include <WinSock2.h>
+#else
+#    include <arpa/inet.h>
+#    include <netinet/in.h>
+#endif
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <thread>
 
 // [names]
 #include <ThinkMeta.ConcurrentTasks/Core.h>
@@ -19,11 +25,12 @@ import ThinkMeta.ConcurrentTasks.Synchronization.AutoResetEvent;
 import ThinkMeta.ConcurrentTasks.Synchronization.ManualResetEvent;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncTcpSocket;
+import ThinkMeta.ConcurrentTasks.Platform.Socket;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::AsyncTcpSocket4;
-using TC::Windows::WinsockError;
-using TC::Windows::WinsockErrorCode;
+using TC::Platform::SocketError; // WSA codes on Windows, errno on Linux
+using TC::Platform::SocketErrorCode;
 // [/names]
 using Clock = std::chrono::steady_clock;
 
@@ -144,13 +151,13 @@ public:
 
 // [receive]
 // A client that waits for news from its server. Its Recv has no time limit; a
-// cancel ends it with WinsockError::OperationAborted.
+// cancel ends it with SocketError::OperationAborted.
 class Subscriber : public TC::Tasks::WaitableTask_s
 {
 public:
     sockaddr_in                             server{};
     TC::Synchronization::ManualResetEvent_s connected; // for the test driver
-    WinsockErrorCode                        error = 0;
+    SocketErrorCode                         error = 0;
 
     void Run() noexcept override
     {
@@ -158,15 +165,15 @@ public:
         sockaddr_in     local{};
         local.sin_family      = AF_INET;
         local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        if (WinsockError::Failed(socket.Create())
-            || WinsockError::Failed(socket.Bind(local))
-            || WinsockError::Failed(socket.Connect(server)))
+        if (SocketError::Failed(socket.Create())
+            || SocketError::Failed(socket.Bind(local))
+            || SocketError::Failed(socket.Connect(server)))
             return;
         connected.Set();
 
-        char  news[256];
-        DWORD received = 0;
-        error          = socket.Recv(news, sizeof(news), &received);
+        char                       news[256];
+        AsyncTcpSocket4::ByteCount received = 0;
+        error = socket.Recv(news, sizeof(news), &received);
         // After an aborted operation a stream socket is fit for closing only.
         socket.Close();
     }
@@ -207,7 +214,7 @@ public:
 int main()
 {
     TC::ConvertThreadToTask();
-    if (WinsockError::Failed(TC::Windows::Socket::Startup())
+    if (SocketError::Failed(TC::Platform::Socket::Startup())
         || !TC::AsyncIo::EnableAsyncIo())
         return 1;
 
@@ -224,7 +231,7 @@ int main()
         // work.
         static Pool pool;
         pool.Start(*scheduler);
-        ::Sleep(50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
         const auto start = Clock::now();
         pool.Shutdown();
         const auto took = Milliseconds(Clock::now() - start);
@@ -255,7 +262,7 @@ int main()
         scheduler->AddTask(&waiter);
         waiter.started.Wait();
         waiter.Cancel();
-        ::Sleep(50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
         const bool stillWaiting = !waiter.returned;
         waiter.request.Set();
         waiter.Wait();
@@ -269,17 +276,17 @@ int main()
         address.sin_family      = AF_INET;
         address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         address.sin_port        = 0; // any free port
-        if (WinsockError::Failed(listener.Create())
-            || WinsockError::Failed(listener.Bind(address))
-            || WinsockError::Failed(listener.GetSockName(address))
-            || WinsockError::Failed(listener.Listen()))
+        if (SocketError::Failed(listener.Create())
+            || SocketError::Failed(listener.Bind(address))
+            || SocketError::Failed(listener.GetSockName(address))
+            || SocketError::Failed(listener.Listen()))
             return 1;
 
         Subscriber subscriber;
         subscriber.server = address;
         scheduler->AddTask(&subscriber);
         AsyncTcpSocket4 peer; // the server side; it never sends
-        if (WinsockError::Failed(listener.Accept(peer)))
+        if (SocketError::Failed(listener.Accept(peer)))
             return 1;
         subscriber.connected.Wait();
         // [cancel-receive]
@@ -289,7 +296,7 @@ int main()
         // [/cancel-receive]
         peer.Close();
         listener.Close();
-        const bool aborted = subscriber.error == WinsockError::OperationAborted;
+        const bool aborted = subscriber.error == SocketError::OperationAborted;
         std::printf("receive on shutdown:    %s\n",
                     aborted ? "OperationAborted" : "other result");
         ok = ok && aborted;
@@ -338,7 +345,7 @@ int main()
     scheduler->Destroy();
     TC::DisableTimers();
     TC::AsyncIo::DisableAsyncIo(); // all sockets are closed, nothing is pending
-    TC::Windows::Socket::Cleanup();
+    TC::Platform::Socket::Cleanup();
     TC::ConvertTaskToThread();
     std::printf(ok ? "OK\n" : "FAILED\n");
     return ok ? 0 : 1;

@@ -1,9 +1,8 @@
 // Guide "Events": AutoResetEvent_s, ManualResetEvent, ManualResetEvent_s, Set from
 // a plain thread, coalescing Sets and an event on the waiter's stack. Checks its
 // own results.
-#include <Windows.h>
-
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <thread>
 
@@ -32,7 +31,7 @@ static void Work() noexcept
 // Stands for a call into a library that delivers its result on a thread of its own.
 static int ComputeOnLibraryThread() noexcept
 {
-    Sleep(20);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
     return 7;
 }
 

@@ -9,8 +9,12 @@
 //
 module;
 
-#define NOMINMAX
-#include <Windows.h>
+#include "Defs.h"
+
+#if defined(CT_PLATFORM_WINDOWS)
+#    define NOMINMAX
+#    include <Windows.h>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -19,15 +23,15 @@ module;
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 
-#include "Defs.h"
-
 export module ThinkMeta.ConcurrentTasks.AsyncIo.StreamedFileReader;
 
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncFile;
+import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncIoRequest;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
+import ThinkMeta.ConcurrentTasks.Platform.VirtualMemory;
 import ThinkMeta.ConcurrentTasks.Synchronization.AutoResetEvent;
 import ThinkMeta.ConcurrentTasks.Synchronization.Semaphore;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
 
 namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
@@ -53,9 +57,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <summary>Overlapped reads the reader task keeps in flight.</summary>
         std::uint32_t readsInFlight = 4;                        // at most MaxReadsInFlight
 
-        /// <summary>Open the file with <c>FILE_FLAG_NO_BUFFERING</c>.</summary>
+        /// <summary>Open the file past the system's cache (<c>FILE_FLAG_NO_BUFFERING</c>, <c>O_DIRECT</c>).</summary>
         /// <remarks>The last read is rounded up to whole sectors.</remarks>
-        bool unbuffered = false; // FILE_FLAG_NO_BUFFERING (whole sectors are read)
+        bool unbuffered = false; // FILE_FLAG_NO_BUFFERING, O_DIRECT (whole sectors are read)
     };
 
     /// <summary>A file streamed into memory, addressed like a mapped file, with bounded memory use.</summary>
@@ -78,7 +82,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// Wait(end) before touching bytes below end and Release when done with them. Needs
     /// <see cref="EnableAsyncIo"/>. The file is read in rising offset order; loaded only grows. Wait suspends
     /// the calling task (an OS thread must have called <see cref="ConvertThreadToTask"/>). Errors: Open returns
-    /// a Win32 error code; a read error is kept in <see cref="ReadError"/> and does not stop the stream - Wait
+    /// the platform's error code; a read error is kept in <see cref="ReadError"/> and does not stop the stream - Wait
     /// still returns, the affected bytes read as zero, so consumers must check ReadError. Only a failed
     /// commit (out of memory) stops the stream like <see cref="Stop"/>: Wait then returns less than asked. Destroy
     /// the object only after the reader task has ended (Run has returned).
@@ -110,11 +114,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
         /// <summary>Releases the address range.</summary>
         /// <remarks>The reader task must have ended (no read in flight).</remarks>
-        ~StreamedFileReader() noexcept
-        {
-            if (base_ != nullptr)
-                VirtualFree(base_, 0, MEM_RELEASE);
-        }
+        ~StreamedFileReader() noexcept = default;
 
         /// <summary>Opens the file and reserves its address range.</summary>
         /// <param name="path">Path of an existing file; must not be <c>nullptr</c>; need not stay valid after the call.</param>
@@ -123,18 +123,19 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </param>
         /// <param name="users">How many <see cref="Release"/> slots are in use.</param>
         /// <returns>
-        /// <c>ERROR_SUCCESS</c> if the file is open and its range reserved; otherwise the Win32 error code (see
-        /// remarks).
+        /// <see cref="Platform::Error::Success"/> if the file is open and its range reserved; otherwise the
+        /// platform's error code (see remarks).
         /// </returns>
         /// <remarks>
-        /// Call once, before the reader task is scheduled. Opens <c>OPEN_EXISTING</c>, <c>GENERIC_READ</c>,
-        /// <c>FILE_SHARE_READ</c>; needs <see cref="EnableAsyncIo"/>. Does not suspend. users <c>0</c> counts as 1, more than
+        /// Call once, before the reader task is scheduled. Opens an existing file for reading, others may read it
+        /// too (<c>OPEN_EXISTING</c>, <c>GENERIC_READ</c>, <c>FILE_SHARE_READ</c>; <c>O_RDONLY</c>); needs
+        /// <see cref="EnableAsyncIo"/>. Does not suspend. users <c>0</c> counts as 1, more than
         /// <see cref="MaxUsers"/> as MaxUsers; slots in use start at <c>0</c>, so nothing is decommitted until each of
-        /// them has released. Returns the Win32 error of <c>CreateFileW</c>/association, <c>GetFileSizeEx</c> or
-        /// the reservation of the file size (rounded up to a segment, plus one).
+        /// them has released. Returns the error of opening the file (and, on Windows, its association), of
+        /// reading its size or of the reservation of the file size (rounded up to a segment, plus one).
         /// </remarks>
         /// <seealso cref="StreamedFileReaderSettings"/>
-        Windows::ErrorCode Open(const wchar_t* path, const StreamedFileReaderSettings& settings = {}, std::uint32_t users = 1) noexcept
+        Platform::ErrorCode Open(Platform::FileName path, const StreamedFileReaderSettings& settings = {}, std::uint32_t users = 1) noexcept
         {
             settings_ = settings;
             if (settings_.readsInFlight == 0 || settings_.readsInFlight > MaxReadsInFlight)
@@ -147,19 +148,25 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             for (std::uint32_t i = 0; i < MaxUsers; ++i)
                 lows_[i] = i < (users == 0 ? 1 : users) ? 0 : ~std::uint64_t{0};
 
+#if defined(CT_PLATFORM_WINDOWS)
             auto error = file_.Create(path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
                                       settings_.unbuffered ? FILE_FLAG_NO_BUFFERING : FILE_FLAG_SEQUENTIAL_SCAN);
-            if (Windows::Error::Failed(error))
+#else
+            Platform::FileOptions options;
+            options.unbuffered = settings_.unbuffered;
+            auto error         = file_.Create(path, options);
+#endif
+            if (Platform::Error::Failed(error))
                 return error;
             AsyncFile::FileSize size = 0;
             error                    = file_.GetSize(size);
-            if (Windows::Error::Failed(error))
+            if (Platform::Error::Failed(error))
                 return error;
             size_ = size;
             // one spare segment: the last one is committed whole
-            base_ = static_cast<std::byte*>(
-                VirtualAlloc(nullptr, static_cast<std::size_t>(RoundUp(size_, settings_.segmentSize) + settings_.segmentSize), MEM_RESERVE, PAGE_READWRITE));
-            return base_ != nullptr ? Windows::Error::Success : Windows::Error::GetLastError();
+            error = memory_.Reserve(static_cast<std::size_t>(RoundUp(size_, settings_.segmentSize) + settings_.segmentSize));
+            base_ = static_cast<std::byte*>(memory_.GetAllocationBase());
+            return error;
         }
 
         /// <summary>Byte <c>0</c> of the file.</summary>
@@ -253,7 +260,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                 }
                 const auto from = released_.load(std::memory_order_relaxed);
                 if (low > from) {
-                    VirtualFree(base_ + from, static_cast<std::size_t>(low - from), MEM_DECOMMIT);
+                    Platform::VirtualMemory::Decommit(base_ + from, static_cast<std::size_t>(low - from));
                     released_.store(low, std::memory_order_seq_cst);
                     readerWake_.Set();
                 }
@@ -278,13 +285,13 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             readerWake_.Set();
         }
 
-        /// <summary>The first read error (<see cref="Windows::Error::Success"/> if none).</summary>
+        /// <summary>The first read error (<see cref="Platform::Error::Success"/> if none).</summary>
         /// <returns>
-        /// <c>ERROR_SUCCESS</c> if every read so far succeeded; otherwise the Win32 error code of the first failed
-        /// read.
+        /// <see cref="Platform::Error::Success"/> if every read so far succeeded; otherwise the platform's error
+        /// code of the first failed read.
         /// </returns>
         /// <remarks>After an error the pages read as zero.</remarks>
-        Windows::ErrorCode ReadError() const noexcept { return error_.load(std::memory_order_relaxed); }
+        Platform::ErrorCode ReadError() const noexcept { return error_.load(std::memory_order_relaxed); }
 
         /// <summary>Seconds all callers of <see cref="Wait"/> waited together.</summary>
         /// <returns>The summed waiting time in seconds (microsecond resolution).</returns>
@@ -300,7 +307,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// Suspends while it may not read further (read-ahead used up and nobody waiting) and
         /// while it waits for the oldest read. Reads complete in any order on the I/O thread but
         /// are accounted in issue order, so loaded grows contiguously. A read error (or a short
-        /// read: <c>ERROR_HANDLE_EOF</c>) is recorded once (<see cref="ReadError"/>); later segments are committed but not read.
+        /// read: <see cref="Platform::Error::EndOfFile"/>) is recorded once (<see cref="ReadError"/>); later segments are committed but not read.
         /// A failed commit is recorded too and stops the reader: nothing from that segment on is loaded.
         /// Closes the file before it ends.
         /// </remarks>
@@ -311,7 +318,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             std::uint64_t       loaded    = 0;
             std::uint64_t       issued    = 0;
             std::uint64_t       completed = 0;
-            Windows::ErrorCode  error     = Windows::Error::Success;
+            Platform::ErrorCode error     = Platform::Error::Success;
             bool                commitFailed = false;
 
             while (loaded < size_) {
@@ -324,9 +331,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                     while (issued - completed < settings_.readsInFlight && issuedTo < size_ && issuedTo < allowed) {
                         // without memory the bytes cannot even read as zero: stop like Stop() (Wait then
                         // returns less than asked) instead of publishing an uncommitted segment
-                        if (VirtualAlloc(base_ + issuedTo, static_cast<std::size_t>(segment), MEM_COMMIT, PAGE_READWRITE) == nullptr) {
-                            if (Windows::Error::Succeeded(error)) {
-                                error = Windows::Error::GetLastError();
+                        if (const auto commitError = Platform::VirtualMemory::Commit(base_ + issuedTo, static_cast<std::size_t>(segment));
+                            Platform::Error::Failed(commitError)) {
+                            if (Platform::Error::Succeeded(error)) {
+                                error = commitError;
                                 error_.store(error, std::memory_order_relaxed);
                             }
                             commitFailed = true;
@@ -339,8 +347,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                         req.SetOffset(issuedTo);
                         // unbuffered: whole sectors (the segment is committed whole; the read ends at the end of the file)
                         const std::uint64_t request = settings_.unbuffered ? RoundUp(bytes_[slot], SectorAlign) : bytes_[slot];
-                        Windows::ErrorCode  result  = Windows::Error::Succeeded(error) ? file_.ReadAsync(base_ + issuedTo, static_cast<DWORD>(request), req) : error;
-                        if (Windows::Error::Failed(result) && !Windows::Error::IsPending(result))
+                        Platform::ErrorCode result  = Platform::Error::Succeeded(error) ? _StartRetrying([&] { return file_.ReadAsync(base_ + issuedTo, static_cast<AsyncFile::ByteCount>(request), req); })
+                                                                                        : error;
+                        if (Platform::Error::Failed(result) && !Platform::Error::IsPending(result))
                             req.RequestCompleted(result, 0);
                         issuedTo += bytes_[slot];
                         ++issued;
@@ -358,8 +367,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                 const auto slot = static_cast<std::uint32_t>(completed % settings_.readsInFlight);
                 auto&      req  = requests_[slot];
                 req.Wait();
-                if (Windows::Error::Succeeded(error) && (Windows::Error::Failed(req.GetError()) || req.GetTransferredBytes() != bytes_[slot])) {
-                    error = Windows::Error::Failed(req.GetError()) ? req.GetError() : static_cast<Windows::ErrorCode>(ERROR_HANDLE_EOF);
+                if (Platform::Error::Succeeded(error) && (Platform::Error::Failed(req.GetError()) || req.GetTransferredBytes() != bytes_[slot])) {
+                    error = Platform::Error::Failed(req.GetError()) ? req.GetError() : static_cast<Platform::ErrorCode>(Platform::Error::EndOfFile);
                     error_.store(error, std::memory_order_relaxed);
                 }
                 loaded += bytes_[slot];
@@ -409,6 +418,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
         StreamedFileReaderSettings settings_;
         AsyncFile                  file_;
+        Platform::VirtualMemory    memory_; // the file's address range
         std::byte*                 base_ = nullptr;
         std::uint64_t              size_ = 0;
 
@@ -419,7 +429,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         std::atomic<bool>               releasePending_{false};
         std::atomic<bool>               stop_{false};
         std::atomic<bool>               finished_{false};
-        std::atomic<Windows::ErrorCode> error_{Windows::Error::Success};
+        std::atomic<Platform::ErrorCode> error_{Platform::Error::Success};
         std::atomic<std::uint64_t>      waited_{0};
         std::atomic<std::uint64_t>      lows_[MaxUsers] = {};
         std::atomic<std::uint32_t>      waiting_{0}; // waiters announced for the next completion

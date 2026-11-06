@@ -1,8 +1,6 @@
 // Guide "Custom primitives": a single-waiter mailbox written directly on Core.h
 // (SuspendTask, SuspendTaskFor, ResumeTask, ISuspendCallback), and a countdown
 // latch built on the library's Waitable. Checks its own results.
-#include <Windows.h>
-
 #include <atomic>
 #include <cstddef>
 #include <cstdio>

@@ -1,6 +1,4 @@
 // Hello task: start a scheduler, run one task on it, wait for the task, shut down.
-#include <Windows.h>
-
 #include <cstdio>
 
 // [names]

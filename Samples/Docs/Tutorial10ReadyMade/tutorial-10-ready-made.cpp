@@ -13,12 +13,12 @@ import ThinkMeta.ConcurrentTasks.AsyncIo.StreamedFileReader;
 import ThinkMeta.ConcurrentTasks.Synchronization.Semaphore;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::OrderedFileWriter;
 using TC::AsyncIo::StreamedFileReader;
-using TC::Windows::Error;
+using TC::Platform::Error;
 using namespace Tutorial;
 // [/names]
 
@@ -178,26 +178,22 @@ void ForkTask::Run() noexcept
     packer_.Fork();
 }
 
-BOOL WINAPI OnConsoleCtrl(DWORD ctrlType) noexcept
+void OnCtrlC() noexcept
 {
-    if (ctrlType != CTRL_C_EVENT)
-        return FALSE;
     stopRequested = true;
-    return TRUE;
 }
 
-int wmain(int argc, wchar_t* argv[])
+int main(int argc, char* argv[])
 {
     Arguments arguments;
     if (!ParseArguments(argc, argv, arguments))
         return arguments.exitCode;
 
-    const std::uint32_t threads   = arguments.threads != 0
-        ? arguments.threads
-        : GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-    const std::size_t   slotCount = std::size_t{4} * threads;
+    const std::uint32_t threads
+        = arguments.threads != 0 ? arguments.threads : ProcessorCount();
+    const std::size_t slotCount = std::size_t{4} * threads;
 
-    SetConsoleCtrlHandler(OnConsoleCtrl, TRUE);
+    HandleCtrlC(OnCtrlC);
     TC::ConvertThreadToTask();
     if (!TC::AsyncIo::EnableAsyncIo())
         return 1;
@@ -224,7 +220,7 @@ int wmain(int argc, wchar_t* argv[])
     TC::ConvertTaskToThread();
 
     if (!packed) {
-        DeleteFileW(arguments.output);
+        RemoveFile(arguments.output);
         std::printf("cannot pack the file\n");
         return 1;
     }

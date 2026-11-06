@@ -1,8 +1,6 @@
 // Guide "Waiting for tasks": WaitableTask_s, WaitableTask with several waiters,
 // TaskGroup_s, Task::Create, Schedule from a task and reusing a group. Checks its
 // own results.
-#include <Windows.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -131,7 +129,8 @@ int main()
         scheduler->AddTask(&task);
         task.Wait(); // suspends main until Run has returned
         // [/wait-one]
-        std::printf("one task:      %llu\n", task.Sum());
+        std::printf("one task:      %llu\n",
+                    static_cast<unsigned long long>(task.Sum()));
         ok = ok && task.Sum() == Expected(1'000'000);
     }
 
@@ -180,7 +179,7 @@ int main()
     for (auto& part : parts)
         total += part.Sum();
     // [/task-group]
-    std::printf("eight tasks:   %llu\n", total);
+    std::printf("eight tasks:   %llu\n", static_cast<unsigned long long>(total));
     ok = ok && total == Expected(n);
 
     // [reuse-group]
@@ -197,7 +196,7 @@ int main()
     for (auto& part : parts)
         total += part.Sum();
     // [/reuse-group]
-    std::printf("second round:  %llu\n", total);
+    std::printf("second round:  %llu\n", static_cast<unsigned long long>(total));
     ok = ok && total == Expected(2 * n) && group.TryWait();
 
     // [run-parent]
@@ -205,7 +204,8 @@ int main()
     scheduler->AddTask(&parent);
     parent.Wait();
     // [/run-parent]
-    std::printf("parent/child:  %llu\n", parent.Total());
+    std::printf("parent/child:  %llu\n",
+                static_cast<unsigned long long>(parent.Total()));
     ok = ok && parent.Total() == Expected(4'000'000);
 
     // [shutdown]

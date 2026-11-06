@@ -1,13 +1,13 @@
 // Guide "Asynchronous files": AsyncFile with the waiting Read/Write, several
 // ReadAsync requests in flight, error codes, and the whole-file ReadFile into a
-// pipe with BulkIoOptions. Works on a file it creates in %TEMP% and deletes; checks
-// its own results outside the regions that the guide shows.
-#include <Windows.h>
-
+// pipe with BulkIoOptions. Works on a file it creates in the temp directory and
+// deletes; checks its own results outside the regions that the guide shows.
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
 #include <vector>
 
 // [names]
@@ -17,14 +17,15 @@ import ThinkMeta.ConcurrentTasks.Tasks.WaitableTask;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncFile;
 import ThinkMeta.ConcurrentTasks.Memory.SpscVirtualMemoryPipe;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::AsyncFile;
-using TC::Windows::Error;
+using TC::Platform::Error;
+using ByteCount = AsyncFile::ByteCount;
 // [/names]
 
-constexpr DWORD BlockSize = 64 * 1024;
+constexpr ByteCount BlockSize = 64 * 1024;
 
 // [write-read]
 // Writes data at the start of the file and reads it back. Each call suspends the
@@ -33,14 +34,14 @@ constexpr DWORD BlockSize = 64 * 1024;
 static bool WriteAndReadBack(AsyncFile& file, const std::vector<std::byte>& data,
                              std::vector<std::byte>& copy) noexcept
 {
-    DWORD written = 0;
-    if (Error::Failed(
-            file.Write(data.data(), static_cast<DWORD>(data.size()), written, 0)))
+    ByteCount written = 0;
+    if (Error::Failed(file.Write(data.data(), static_cast<ByteCount>(data.size()),
+                                 written, 0)))
         return false;
 
-    DWORD read = 0;
+    ByteCount read = 0;
     if (Error::Failed(
-            file.Read(copy.data(), static_cast<DWORD>(copy.size()), read, 0)))
+            file.Read(copy.data(), static_cast<ByteCount>(copy.size()), read, 0)))
         return false;
     return read == copy.size();
 }
@@ -51,10 +52,11 @@ static bool WriteAndReadBack(AsyncFile& file, const std::vector<std::byte>& data
 static bool ReadWithTimeout(AsyncFile&              file,
                             std::vector<std::byte>& buffer) noexcept
 {
-    DWORD      read  = 0;
-    const auto error = file.Read(buffer.data(), static_cast<DWORD>(buffer.size()),
-                                 read, 0, TC::Duration::Seconds(5));
-    if (error == ERROR_TIMEOUT)
+    ByteCount  read = 0;
+    const auto error
+        = file.Read(buffer.data(), static_cast<ByteCount>(buffer.size()), read, 0,
+                    TC::Duration::Seconds(5));
+    if (error == Error::TimedOut)
         std::printf("the disk did not answer in time\n");
     return Error::Succeeded(error);
 }
@@ -92,8 +94,7 @@ static bool ReadFourBlocks(AsyncFile& file,
 static bool IsEndOfFile(AsyncFile& file, std::uint64_t offset) noexcept
 {
     std::byte buffer[512];
-    DWORD     read = 0;
-    // ERROR_HANDLE_EOF
+    ByteCount read = 0;
     return file.Read(buffer, sizeof(buffer), read, offset) == Error::EndOfFile;
 }
 // [/errors]
@@ -120,7 +121,7 @@ static std::uint64_t Consume(TC::Memory::SpscVirtualMemoryPipe& pipe) noexcept
 class FileTask : public TC::Tasks::WaitableTask_s
 {
 public:
-    explicit FileTask(const wchar_t* path) noexcept : path_(path) {}
+    explicit FileTask(TC::Platform::FileName path) noexcept : path_(path) {}
 
     bool Ok() const noexcept { return ok_; }
 
@@ -130,9 +131,12 @@ private:
     bool Waiting() noexcept
     {
         // [create]
-        AsyncFile file;
-        if (Error::Failed(file.Create(path_, GENERIC_READ | GENERIC_WRITE, 0,
-                                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL)))
+        AsyncFile                           file;
+        constexpr TC::Platform::FileOptions options{
+            .access    = TC::Platform::FileAccess::ReadWrite,
+            .creation  = TC::Platform::FileCreation::CreateAlways,
+            .shareRead = false};
+        if (Error::Failed(file.Create(path_, options)))
             return false;
         // [/create]
 
@@ -146,15 +150,15 @@ private:
         std::printf("written and read back: %s\n",
                     written && timed ? "ok" : "failed");
         std::printf("read past the end:     %s\n",
-                    atEnd ? "ERROR_HANDLE_EOF" : "unexpected");
+                    atEnd ? "EndOfFile" : "unexpected");
         return written && timed && atEnd && Error::Succeeded(file.Close());
     }
 
     bool InFlight() noexcept
     {
         AsyncFile file;
-        if (Error::Failed(file.Create(path_, GENERIC_READ, FILE_SHARE_READ,
-                                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL)))
+        // the default options: an existing file, for reading
+        if (Error::Failed(file.Create(path_, TC::Platform::FileOptions{})))
             return false;
 
         std::vector<std::byte> buffers[4];
@@ -187,9 +191,8 @@ private:
         TC::AsyncIo::BulkIoOptions options;
         options.blockSize      = 256 * 1024;
         options.blocksInFlight = 8;
-        const auto error       = AsyncFile::ReadFile(
-            path_, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
-            FILE_FLAG_SEQUENTIAL_SCAN, &pipe, options);
+        const auto error = AsyncFile::ReadFile(path_, TC::Platform::FileOptions{},
+                                               &pipe, options);
         helpers_.Wait(); // the consumer has taken everything
         // [/bulk]
 
@@ -198,18 +201,15 @@ private:
         return Error::Succeeded(error) && bytes == 4 * BlockSize;
     }
 
-    const wchar_t*                   path_;
+    TC::Platform::FileName           path_;
     bool                             ok_ = false;
     TC::Synchronization::TaskGroup_s helpers_; // outlives the consumer task
 };
 
 int main()
 {
-    wchar_t     path[MAX_PATH];
-    const DWORD length = GetTempPathW(MAX_PATH, path);
-    if (length == 0 || length + 32 > MAX_PATH)
-        return 1;
-    lstrcatW(path, L"ct-guide-async-files.bin");
+    const std::filesystem::path path
+        = std::filesystem::temp_directory_path() / "ct-guide-async-files.bin";
 
     TC::ConvertThreadToTask();
     // [enable]
@@ -224,7 +224,7 @@ int main()
         return 1;
     scheduler->Start();
 
-    FileTask task(path);
+    FileTask task(path.c_str());
     scheduler->AddTask(&task);
     task.Wait();
     const bool ok = task.Ok();
@@ -236,7 +236,8 @@ int main()
     TC::AsyncIo::DisableAsyncIo(); // no operation may be pending any more
     // [/disable]
     TC::ConvertTaskToThread();
-    DeleteFileW(path);
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
 
     std::printf(ok ? "OK\n" : "FAILED\n");
     return ok ? 0 : 1;

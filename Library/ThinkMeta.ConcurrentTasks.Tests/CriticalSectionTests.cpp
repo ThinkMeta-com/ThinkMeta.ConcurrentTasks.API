@@ -12,10 +12,9 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
     constexpr std::size_t NumTasks                 = 32;
     constexpr auto        TaskExecutionDuration    = std::chrono::milliseconds(500);
-    constexpr DWORD       SleepSafetyMarginSeconds = 2;
 
     template <typename CS_T>
-    class CriticalSectionTestTask : public Tasks::Task
+    class CriticalSectionTestTask final : public Tasks::Task
     {
     public:
         CriticalSectionTestTask(CS_T& cs, std::chrono::milliseconds targetDuration, std::atomic<std::size_t>& completedCount,

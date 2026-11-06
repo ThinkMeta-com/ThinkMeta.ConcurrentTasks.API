@@ -270,6 +270,10 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 LogDebugMessage(std::format(L"Testing cyclic burst load with {} thread(s)", numThreads));
                 ConvertThreadToTask();
 
+                // A task must outlive its OnTaskExited, which comes after the end of Run that a
+                // cycle waits for: each cycle's tasks stay here until the scheduler has stopped.
+                std::vector<std::unique_ptr<ActionTask>> finishedTasks;
+
                 SchedulerInfo schedulerInfo = {.numberOfThreads = numThreads};
                 ScopedScheduler scheduler(schedulerInfo);
                 scheduler.Start();
@@ -310,6 +314,9 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
                     // Pause briefly to let worker threads transition to idle sleeping state on WaitOnAddress
                     SimulateCpuLoad(std::chrono::milliseconds(50));
+
+                    for (auto& task : burstTasks)
+                        finishedTasks.push_back(std::move(task));
                 }
 
                 scheduler.Stop();
@@ -325,6 +332,10 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
             for (DWORD numThreads : threadCounts) {
                 LogDebugMessage(std::format(L"Testing variable active thread sleep and resume with {} thread(s)", numThreads));
                 ConvertThreadToTask();
+
+                // A task must outlive its OnTaskExited, which comes after the end of Run that a
+                // cycle waits for: each cycle's tasks stay here until the scheduler has stopped.
+                std::vector<std::unique_ptr<ActionTask>> finishedTasks;
 
                 SchedulerInfo schedulerInfo = {.numberOfThreads = numThreads};
                 ScopedScheduler scheduler(schedulerInfo);
@@ -412,6 +423,10 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                         std::lock_guard<std::mutex> lock(threadIdMutex);
                         Assert::IsTrue(activeThreadIds.size() > 0 && activeThreadIds.size() <= N, L"Worker threads participating in execution must be non-empty and <= configured thread count");
                     }
+
+                    finishedTasks.push_back(std::move(orchestratorTask));
+                    for (auto& task : workerTasks)
+                        finishedTasks.push_back(std::move(task));
                 }
 
                 scheduler.Stop();

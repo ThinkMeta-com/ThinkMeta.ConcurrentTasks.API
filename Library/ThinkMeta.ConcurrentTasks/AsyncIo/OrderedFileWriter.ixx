@@ -8,28 +8,35 @@
 //
 module;
 
-#define NOMINMAX
-#include <Windows.h>
+#include "Defs.h"
+
+#if defined(CT_PLATFORM_WINDOWS)
+#    define NOMINMAX
+#    include <Windows.h>
+#endif
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
-#include <cwchar>
 #include <new>
+#include <type_traits>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
-
-#include "Defs.h"
 
 export module ThinkMeta.ConcurrentTasks.AsyncIo.OrderedFileWriter;
 
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncFile;
+import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncIoRequest;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
+import ThinkMeta.ConcurrentTasks.Platform.Mutex;
+import ThinkMeta.ConcurrentTasks.Platform.VirtualMemory;
 import ThinkMeta.ConcurrentTasks.Synchronization.AutoResetEvent;
 import ThinkMeta.ConcurrentTasks.Synchronization.Semaphore;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
 
 namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
@@ -56,7 +63,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <remarks>A batch is split at half of it; the producer waits when the ring is full.</remarks>
         std::uint32_t jobRing = 65536;
 
-        /// <summary>Open the file with <c>FILE_FLAG_NO_BUFFERING</c>.</summary>
+        /// <summary>Open the file past the system's cache (<c>FILE_FLAG_NO_BUFFERING</c>, <c>O_DIRECT</c>).</summary>
         /// <remarks>The last write is padded to whole sectors and <see cref="OrderedFileWriter::Close"/> sets the exact size.</remarks>
         bool unbuffered = false;
     };
@@ -116,7 +123,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// EndBatch can wait for or run copy batches, Close waits for the writer task.
     /// </para>
     /// <para>
-    /// Errors: Open returns a Win32 error code; Write, WriteDeferred and WriteAt report nothing.
+    /// Errors: Open returns the platform's error code; Write, WriteDeferred and WriteAt report nothing.
     /// A failed Open or a failed append (address range exhausted, commit or allocation failed,
     /// WriteAt beyond Position) sets <see cref="Failed"/>, after which appends are dropped. A failed or short write makes the writer issue no further writes;
     /// Close returns <c>false</c> for any of these and for a failed size/patch finalization. The file
@@ -181,19 +188,14 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// </remarks>
         ~OrderedFileWriter() noexcept
         {
-            if (base_ != nullptr)
-                VirtualFree(base_, 0, MEM_RELEASE);
-            if (jobs_ != nullptr)
-                HeapFree(GetProcessHeap(), 0, jobs_);
-            if (batches_ != nullptr)
-                HeapFree(GetProcessHeap(), 0, batches_);
+            std::free(jobs_);
+            std::free(batches_);
             while (patches_ != nullptr) {
                 Patch* next = patches_->next;
-                HeapFree(GetProcessHeap(), 0, patches_);
+                std::free(patches_);
                 patches_ = next;
             }
-            if (path_ != nullptr)
-                HeapFree(GetProcessHeap(), 0, path_);
+            std::free(path_);
         }
 
         /// <summary>The writer task.</summary>
@@ -216,21 +218,22 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// Tuning of the writer; out-of-range values are corrected (see <see cref="OrderedFileWriterSettings"/>).
         /// </param>
         /// <returns>
-        /// <c>ERROR_SUCCESS</c> if the file is open; otherwise the Win32 error code (see remarks) and the writer is
-        /// marked failed.
+        /// <see cref="Platform::Error::Success"/> if the file is open; otherwise the platform's error code (see
+        /// remarks) and the writer is marked failed.
         /// </returns>
         /// <remarks>
-        /// Call once, before any append, from the producer. Creates or truncates <paramref name="path"/>
-        /// (<c>CREATE_ALWAYS</c>, <c>GENERIC_WRITE</c>, <c>FILE_SHARE_READ</c>) and needs <see cref="EnableAsyncIo"/>. Does not
-        /// suspend. Returns a Win32 error code: <c>ERROR_NOT_ENOUGH_MEMORY</c> for the bookkeeping, the
-        /// <c>CreateFileW</c>/association error, or the error of reserving bound bytes (rounded up to a
-        /// segment, plus one) of address space. On any error the writer is marked failed
+        /// Call once, before any append, from the producer. Creates or truncates <paramref name="path"/> for
+        /// writing, others may read it (<c>CREATE_ALWAYS</c>, <c>GENERIC_WRITE</c>, <c>FILE_SHARE_READ</c>;
+        /// <c>O_WRONLY | O_CREAT | O_TRUNC</c>) and needs <see cref="EnableAsyncIo"/>. Does not
+        /// suspend. Returns <see cref="Platform::Error::NotEnoughMemory"/> for the bookkeeping, the error of
+        /// creating the file (and, on Windows, its association), or the error of reserving bound bytes (rounded
+        /// up to a segment, plus one) of address space. On any error the writer is marked failed
         /// (<see cref="Failed"/> is <c>true</c>): appends are dropped, <see cref="Close"/> returns <c>false</c>, and the
         /// destructor frees what was allocated.
         /// </remarks>
         /// <seealso cref="OrderedFileWriterSettings"/>
         /// <seealso cref="Close"/>
-        Windows::ErrorCode Open(const wchar_t* path, std::uint64_t bound, const OrderedFileWriterSettings& settings = {}) noexcept
+        Platform::ErrorCode Open(Platform::FileName path, std::uint64_t bound, const OrderedFileWriterSettings& settings = {}) noexcept
         {
             settings_ = settings;
             if (settings_.writesInFlight == 0 || settings_.writesInFlight > MaxWritesInFlight)
@@ -243,32 +246,43 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             if (settings_.jobRing < 2)
                 settings_.jobRing = 2;
 
-            const auto length = wcslen(path) + 1;
-            path_             = static_cast<wchar_t*>(HeapAlloc(GetProcessHeap(), 0, length * sizeof(wchar_t)));
-            jobs_             = static_cast<Job*>(HeapAlloc(GetProcessHeap(), 0, settings_.jobRing * sizeof(Job)));
-            batches_          = static_cast<Batch*>(HeapAlloc(GetProcessHeap(), 0, settings_.batchRing * sizeof(Batch)));
+            std::size_t length = 1; // with the terminating zero
+            while (path[length - 1] != 0)
+                ++length;
+            path_    = static_cast<PathChar*>(std::malloc(length * sizeof(PathChar)));
+            jobs_    = static_cast<Job*>(std::malloc(settings_.jobRing * sizeof(Job)));
+            batches_ = static_cast<Batch*>(std::malloc(settings_.batchRing * sizeof(Batch)));
             if (path_ == nullptr || jobs_ == nullptr || batches_ == nullptr) {
                 failed_ = true;
-                return ERROR_NOT_ENOUGH_MEMORY;
+                return Platform::Error::NotEnoughMemory;
             }
             for (std::uint32_t i = 0; i < settings_.batchRing; ++i)
                 new (&batches_[i]) Batch{};
-            std::memcpy(path_, path, length * sizeof(wchar_t));
+            std::memcpy(path_, path, length * sizeof(PathChar));
 
+#if defined(CT_PLATFORM_WINDOWS)
             auto error = file_.Create(path, GENERIC_WRITE, FILE_SHARE_READ, CREATE_ALWAYS,
                                       settings_.unbuffered ? FILE_FLAG_NO_BUFFERING : FILE_FLAG_SEQUENTIAL_SCAN);
-            if (Windows::Error::Failed(error)) {
+#else
+            Platform::FileOptions options;
+            options.access     = Platform::FileAccess::Write;
+            options.creation   = Platform::FileCreation::CreateAlways;
+            options.unbuffered = settings_.unbuffered;
+            auto error         = file_.Create(path, options);
+#endif
+            if (Platform::Error::Failed(error)) {
                 failed_ = true;
                 return error;
             }
             reserved_ = RoundUp(bound, settings_.segmentSize) + settings_.segmentSize;
-            base_     = static_cast<std::byte*>(VirtualAlloc(nullptr, static_cast<std::size_t>(reserved_), MEM_RESERVE, PAGE_READWRITE));
-            if (base_ == nullptr) {
+            error     = memory_.Reserve(static_cast<std::size_t>(reserved_));
+            if (Platform::Error::Failed(error)) {
                 failed_ = true;
-                return Windows::Error::GetLastError();
+                return error;
             }
+            base_ = static_cast<std::byte*>(memory_.GetAllocationBase());
             open_ = true;
-            return Windows::Error::Success;
+            return Platform::Error::Success;
         }
 
         /// <summary>Bytes appended so far: the file offset of the next append. Producer only.</summary>
@@ -406,13 +420,13 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                 return;
             }
             // the writer issues no write while a patch decides between the file and the memory
-            AcquireSRWLockExclusive(&issueLock_);
+            issueLock_.Lock();
             if (pos < issuedTo_ && size > 0) {
                 const auto n     = static_cast<std::size_t>(pos + size <= issuedTo_ ? size : issuedTo_ - pos);
-                auto*      patch = static_cast<Patch*>(HeapAlloc(GetProcessHeap(), 0, sizeof(Patch) + n));
+                auto*      patch = static_cast<Patch*>(std::malloc(sizeof(Patch) + n));
                 if (patch == nullptr) {
                     failed_ = true;
-                    ReleaseSRWLockExclusive(&issueLock_);
+                    issueLock_.Unlock();
                     return;
                 }
                 patch->pos  = pos;
@@ -427,7 +441,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             }
             if (size > 0)
                 std::memcpy(base_ + pos, p, size);
-            ReleaseSRWLockExclusive(&issueLock_);
+            issueLock_.Unlock();
         }
 
         /// <summary>Finishes the file.</summary>
@@ -462,9 +476,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             if (writeFailed_.load(std::memory_order_acquire))
                 failed_ = true;
             // unbuffered: the last write was padded to whole sectors; cut the file to its size
-            if (settings_.unbuffered && Windows::Error::Failed(file_.SetSize(position_)))
+            if (settings_.unbuffered && Platform::Error::Failed(file_.SetSize(position_)))
                 failed_ = true;
-            if (Windows::Error::Failed(file_.Close()))
+            if (Platform::Error::Failed(file_.Close()))
                 failed_ = true;
             if (patches_ != nullptr)
                 Finalize();
@@ -503,7 +517,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         }
 
     private:
-        using Clock = std::chrono::steady_clock;
+        using Clock    = std::chrono::steady_clock;
+        using PathChar = std::remove_const_t<std::remove_pointer_t<Platform::FileName>>;
 
         struct Job {
             std::byte*       dst;
@@ -555,7 +570,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             }
             if (end > committed_) {
                 const std::uint64_t to = RoundUp(end, settings_.segmentSize);
-                if (VirtualAlloc(base_ + committed_, static_cast<std::size_t>(to - committed_), MEM_COMMIT, PAGE_READWRITE) == nullptr) {
+                if (Platform::Error::Failed(Platform::VirtualMemory::Commit(base_ + committed_, static_cast<std::size_t>(to - committed_)))) {
                     failed_ = true;
                     return false;
                 }
@@ -680,11 +695,11 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         void Issue(std::uint64_t end) noexcept
         {
             const auto slot = static_cast<std::uint32_t>(issued_ % settings_.writesInFlight);
-            AcquireSRWLockExclusive(&issueLock_);
+            issueLock_.Lock();
             const std::uint64_t pos   = issuedTo_;
             const std::uint64_t bytes = end - pos < settings_.segmentSize ? end - pos : settings_.segmentSize;
             issuedTo_ += bytes;
-            ReleaseSRWLockExclusive(&issueLock_);
+            issueLock_.Unlock();
             // unbuffered: the last write is rounded up to whole sectors (zero pages), the size is set at the end
             const std::uint64_t request = settings_.unbuffered ? RoundUp(bytes, SectorAlign) : bytes;
             auto&               req     = requests_[slot];
@@ -692,10 +707,11 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             req.SetOffset(pos);
             ranges_[slot]                     = Range{pos, request};
             const auto               t0     = Clock::now();
-            const Windows::ErrorCode result = writeFailed_.load(std::memory_order_relaxed) ? static_cast<Windows::ErrorCode>(ERROR_WRITE_FAULT)
-                                                                                           : file_.WriteAsync(base_ + pos, static_cast<DWORD>(request), req);
+            const Platform::ErrorCode result = writeFailed_.load(std::memory_order_relaxed)
+                                                  ? static_cast<Platform::ErrorCode>(Platform::Error::WriteFault)
+                                                  : _StartRetrying([&] { return file_.WriteAsync(base_ + pos, static_cast<AsyncFile::ByteCount>(request), req); });
             writerIssuing_ += Seconds(t0, Clock::now());
-            if (Windows::Error::Failed(result) && !Windows::Error::IsPending(result)) {
+            if (Platform::Error::Failed(result) && !Platform::Error::IsPending(result)) {
                 writeFailed_.store(true, std::memory_order_relaxed);
                 req.RequestCompleted(result, 0);
             }
@@ -713,39 +729,58 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                 req.Wait();
                 writerWaited_ += Seconds(t0, Clock::now());
             }
-            if (Windows::Error::Failed(req.GetError()) || req.GetTransferredBytes() != ranges_[slot].bytes)
+            if (Platform::Error::Failed(req.GetError()) || req.GetTransferredBytes() != ranges_[slot].bytes)
                 writeFailed_.store(true, std::memory_order_relaxed);
             if (ranges_[slot].bytes == settings_.segmentSize && ranges_[slot].pos % settings_.segmentSize == 0)
-                VirtualFree(base_ + ranges_[slot].pos, static_cast<std::size_t>(settings_.segmentSize), MEM_DECOMMIT);
+                Platform::VirtualMemory::Decommit(base_ + ranges_[slot].pos, static_cast<std::size_t>(settings_.segmentSize));
             ++completed_;
             return true;
         }
 
         /// <summary>Applies the patches.</summary>
-        /// <remarks>Through a buffered handle after the last write.</remarks>
+        /// <remarks>Through a buffered handle after the last write (unaligned patches need one).</remarks>
         void Finalize() noexcept
         {
-            HANDLE h = CreateFileW(path_, GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (h == INVALID_HANDLE_VALUE) {
+            Platform::FileOptions options;
+            options.access = Platform::FileAccess::Write;
+            Platform::File file;
+            if (Platform::Error::Failed(file.Create(path_, options))) {
                 failed_ = true;
                 return;
             }
             for (const Patch* patch = patches_; patch != nullptr; patch = patch->next) {
+#if defined(CT_PLATFORM_WINDOWS)
                 OVERLAPPED ov   = {};
                 ov.Offset       = static_cast<DWORD>(patch->pos);
                 ov.OffsetHigh   = static_cast<DWORD>(patch->pos >> 32);
                 DWORD written   = 0;
-                if (!WriteFile(h, patch + 1, static_cast<DWORD>(patch->size), &written, &ov) || written != patch->size)
+                if (Platform::Error::Failed(file.Write(patch + 1, static_cast<DWORD>(patch->size), &written, &ov)) || written != patch->size)
                     failed_ = true;
+#else
+                // a write may be short or interrupted: the rest follows until it is all written
+                const auto* bytes = reinterpret_cast<const std::byte*>(patch + 1);
+                for (std::size_t done = 0; done < patch->size;) {
+                    std::size_t written = 0;
+                    const auto  error   = file.WriteAt(bytes + done, patch->size - done, patch->pos + done, written);
+                    if (error == EINTR)
+                        continue;
+                    if (Platform::Error::Failed(error) || written == 0) {
+                        failed_ = true;
+                        break;
+                    }
+                    done += written;
+                }
+#endif
             }
-            if (!CloseHandle(h))
+            if (Platform::Error::Failed(file.Close()))
                 failed_ = true;
         }
 
         OrderedFileWriterSettings settings_;
         WriterTask                writerTask_;
         AsyncFile                 file_;
-        wchar_t*                  path_      = nullptr;
+        Platform::VirtualMemory   memory_; // the output's address range
+        PathChar*                 path_      = nullptr;
         std::byte*                base_      = nullptr;
         std::uint64_t             reserved_  = 0;
         std::uint64_t             committed_ = 0;
@@ -772,7 +807,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         Synchronization::AutoResetEvent doneEvent_;
 
         // writes (writer task; issuedTo_ is also read by WriteAt under issueLock_)
-        SRWLOCK                         issueLock_ = SRWLOCK_INIT;
+        Platform::Mutex                 issueLock_;
         std::atomic<std::uint64_t>      doneTo_{0};
         std::atomic<bool>               final_{false};
         std::atomic<bool>               writeFailed_{false};

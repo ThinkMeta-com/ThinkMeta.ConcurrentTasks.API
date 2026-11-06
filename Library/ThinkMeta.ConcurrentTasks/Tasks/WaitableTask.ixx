@@ -25,7 +25,8 @@ namespace ThinkMeta::ConcurrentTasks::Tasks {
     using Synchronization::SuspensionKind;
     using Synchronization::_ManualResetEvent;
 
-    template <SuspensionKind _SuspensionKind, std::invocable F>
+    // exported like the definition below: a declaration with module linkage cannot be exported later
+    export template <SuspensionKind _SuspensionKind, std::invocable F>
     class _WaitableLambdaTask;
 
     /// <summary>A <see cref="Task"/> that others can wait for until it has exited.</summary>

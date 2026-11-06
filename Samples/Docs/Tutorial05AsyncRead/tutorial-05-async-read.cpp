@@ -8,11 +8,11 @@
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncFile;
 import ThinkMeta.ConcurrentTasks.Tasks.WaitableTask;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::AsyncFile;
-using TC::Windows::Error;
+using TC::Platform::Error;
 using namespace Tutorial;
 // [/names]
 
@@ -49,9 +49,8 @@ public:
     bool Pack(TC::ITaskScheduler& scheduler, const Arguments& arguments)
     {
         AsyncFile::FileSize size = 0;
-        if (Error::Failed(input_.Create(arguments.input, GENERIC_READ,
-                                        FILE_SHARE_READ, OPEN_EXISTING,
-                                        FILE_FLAG_SEQUENTIAL_SCAN))
+        if (Error::Failed(
+                input_.Create(arguments.input, TC::Platform::FileOptions{}))
             || Error::Failed(input_.GetSize(size)))
             return false;
         File output = File::Create(arguments.output);
@@ -86,9 +85,9 @@ public:
     {
         for (std::size_t i = 0; i < count_; ++i) {
             const std::size_t offset = i * blockSize_;
-            const auto        wanted
-                = static_cast<DWORD>(std::min(blockSize_, data_.size() - offset));
-            DWORD      read  = 0; // DWORD: Read's out parameter
+            const auto        wanted = static_cast<AsyncFile::ByteCount>(
+                std::min(blockSize_, data_.size() - offset));
+            AsyncFile::ByteCount read = 0;
             const auto error = input_.Read(&data_[offset], wanted, read, offset);
             if (Error::Failed(error) || read != wanted) {
                 // Main waits for every block, so it still gets one: an empty
@@ -119,7 +118,7 @@ void ReaderTask::Run() noexcept
 }
 
 // [main]
-int wmain(int argc, wchar_t* argv[])
+int main(int argc, char* argv[])
 {
     Arguments arguments;
     if (!ParseArguments(argc, argv, arguments))

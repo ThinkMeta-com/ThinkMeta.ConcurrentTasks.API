@@ -2,9 +2,6 @@
 // OrderedFileWriter. Record headers are appended at once, payloads are deferred
 // copies done by copy tasks, and the writer task writes the finished front of the
 // file while the producer goes on.
-#define NOMINMAX
-#include <Windows.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -17,7 +14,7 @@
 import ThinkMeta.ConcurrentTasks.AsyncIo.OrderedFileWriter;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::OrderedFileWriter;
@@ -113,7 +110,7 @@ bool Verify(const std::filesystem::path& path, const std::vector<std::byte>& sou
 int main()
 {
     const std::filesystem::path path = std::filesystem::temp_directory_path()
-        / L"ConcurrentTasks-ordered-output.bin";
+        / "ConcurrentTasks-ordered-output.bin";
 
     // The payload source: borrowed by WriteDeferred, so it outlives Close.
     std::vector<std::byte> source(2 * MaxPayload);
@@ -147,14 +144,14 @@ int main()
         // decommitted segment by segment as the file grows and gets written.
         const std::uint64_t bound = sizeof(FileHeader)
             + std::uint64_t{Records} * (sizeof(RecordHeader) + MaxPayload);
-        const TC::Windows::ErrorCode error = writer.Open(path.c_str(), bound);
+        const TC::Platform::ErrorCode error = writer.Open(path.c_str(), bound);
 
         auto producer = TC::Tasks::Task::Create([&] {
             closed = Produce(writer, source);
             writer.StopCopyTasks(CopyTasks); // after Close: lets the copy tasks end
         });
 
-        if (TC::Windows::Error::Succeeded(error)) {
+        if (TC::Platform::Error::Succeeded(error)) {
             // Writer and copy tasks after Open, the producer last.
             group.AddTask(&writer.Writer());
             scheduler->AddTask(&writer.Writer());

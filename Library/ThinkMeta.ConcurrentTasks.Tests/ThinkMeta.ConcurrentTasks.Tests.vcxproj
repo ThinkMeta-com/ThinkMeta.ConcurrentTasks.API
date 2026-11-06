@@ -54,6 +54,9 @@
     <ClCompile Include="DispatcherSchedulerTests.cpp" />
     <ClCompile Include="WaitableLambdaTaskTests.cpp" />
     <ClCompile Include="SpscVirtualMemoryPipeTests.cpp" />
+    <ClCompile Include="PlatformFileTests.cpp" />
+    <ClCompile Include="AsyncFileTests.cpp" />
+    <ClCompile Include="PlatformSocketTests.cpp" />
     <ClCompile Include="CrashDump.cpp" />
     <ClCompile Include="AwaitTests.cpp" />
     <ClCompile Include="WinRTAwaitTests.cpp" />

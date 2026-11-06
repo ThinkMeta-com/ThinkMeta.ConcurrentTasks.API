@@ -58,7 +58,7 @@ private:
 };
 
 // [main]
-int wmain(int argc, wchar_t* argv[])
+int main(int argc, char* argv[])
 {
     Arguments arguments;
     if (!ParseArguments(argc, argv, arguments))
@@ -90,11 +90,10 @@ int wmain(int argc, wchar_t* argv[])
     Packer          packer; // lives until after Stop
     const Stopwatch total;
     const bool      packed = packer.Pack(*scheduler, arguments);
-    std::printf(
-        "time: %.2f s (%llu blocks of %zu KB, %u threads)\n", total.Seconds(),
-        static_cast<unsigned long long>(blocks), arguments.blockSize / 1024,
-        arguments.threads != 0 ? arguments.threads
-                               : GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
+    std::printf("time: %.2f s (%llu blocks of %zu KB, %u threads)\n",
+                total.Seconds(), static_cast<unsigned long long>(blocks),
+                arguments.blockSize / 1024,
+                arguments.threads != 0 ? arguments.threads : ProcessorCount());
 
     scheduler->Stop();
     scheduler->Destroy();

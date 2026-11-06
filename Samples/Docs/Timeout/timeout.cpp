@@ -1,9 +1,6 @@
 // Timeouts: a wait with a time limit, a sleeping task, a task started later by time
 // and a timed start that is cancelled. All of it needs the core's timer thread
 // (EnableTimers).
-#define NOMINMAX
-#include <Windows.h>
-
 #include <chrono>
 #include <cstdio>
 

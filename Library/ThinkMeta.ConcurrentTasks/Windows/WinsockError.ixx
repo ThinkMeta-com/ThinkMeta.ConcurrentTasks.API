@@ -47,6 +47,10 @@ namespace ThinkMeta::ConcurrentTasks::Windows {
         static constexpr Type AddressFamilyNotSupported = WSAEAFNOSUPPORT;
         static constexpr Type AddressInUse              = WSAEADDRINUSE;
         static constexpr Type AddressNotAvailable       = WSAEADDRNOTAVAIL;
+        static constexpr Type ConnectionAborted         = WSAECONNABORTED;
+        static constexpr Type ConnectionReset           = WSAECONNRESET;
+        static constexpr Type NotConnected              = WSAENOTCONN;
+        static constexpr Type ConnectionRefused         = WSAECONNREFUSED;
 
         /// <summary><c>WSA_IO_PENDING</c>: an overlapped operation was started and completes later.</summary>
         static constexpr Type Pending = WSA_IO_PENDING;

@@ -1,14 +1,15 @@
 // Guide "Streaming large files": OrderedFileWriter builds a file of records (Write,
 // WriteDeferred, EndBatch, WriteAt, copy tasks, writer task), StreamedFileReader
-// reads it back for two users with bounded memory. Uses a file in %TEMP% that it
-// deletes; checks its own results outside the regions that the guide shows.
-#include <Windows.h>
-
+// reads it back for two users with bounded memory. Uses a file in the temp
+// directory that it deletes; checks its own results outside the regions that the
+// guide shows.
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <span>
+#include <system_error>
 #include <vector>
 
 // [names]
@@ -17,7 +18,7 @@ import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.AsyncIo.OrderedFileWriter;
 import ThinkMeta.ConcurrentTasks.AsyncIo.StreamedFileReader;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::OrderedFileWriter;
@@ -116,11 +117,8 @@ void ReadRecords(StreamedFileReader& reader, std::uint64_t count) noexcept
 
 int main()
 {
-    wchar_t     path[MAX_PATH];
-    const DWORD length = GetTempPathW(MAX_PATH, path);
-    if (length == 0 || length + 32 > MAX_PATH)
-        return 1;
-    lstrcatW(path, L"ct-guide-streaming.bin");
+    const std::filesystem::path path
+        = std::filesystem::temp_directory_path() / "ct-guide-streaming.bin";
 
     TC::ConvertThreadToTask();
     if (!TC::AsyncIo::EnableAsyncIo())
@@ -159,7 +157,7 @@ int main()
 
     // the largest size the file may reach
     const std::uint64_t bound = sizeof(Header) + items.size() * RecordSize;
-    if (TC::Windows::Error::Failed(writer.Open(path, bound, settings)))
+    if (TC::Platform::Error::Failed(writer.Open(path.c_str(), bound, settings)))
         return 1;
 
     TC::Tasks::Task* writerTasks[] = {&writer.Writer(), &copy1, &copy2};
@@ -178,7 +176,8 @@ int main()
 
     const auto          stats    = writer.Stats();
     const std::uint64_t fileSize = sizeof(Header) + withPayload * RecordSize;
-    std::printf("written:  %llu records, close %s\n", stats.deferredCopies,
+    std::printf("written:  %llu records, close %s\n",
+                static_cast<unsigned long long>(stats.deferredCopies),
                 closed ? "ok" : "failed");
     ok = ok && closed && stats.bytes == fileSize
         && stats.deferredCopies == withPayload;
@@ -191,7 +190,8 @@ int main()
     readSettings.readAhead     = 4 << 20;
     readSettings.readsInFlight = 4;
 
-    if (TC::Windows::Error::Failed(reader.Open(path, readSettings, 2))) // two users
+    // two users
+    if (TC::Platform::Error::Failed(reader.Open(path.c_str(), readSettings, 2)))
         return 1;
     tasks.AddTask(&reader);
     scheduler->AddTask(&reader); // the reader is a task itself
@@ -220,8 +220,10 @@ int main()
     // [/reader-run]
 
     const std::uint64_t window = readSettings.readAhead + readSettings.segmentSize;
-    std::printf("read:     %llu records, bad %llu, read error %lu\n", recordsSeen,
-                badRecords, reader.ReadError());
+    std::printf("read:     %llu records, bad %llu, read error %lld\n",
+                static_cast<unsigned long long>(recordsSeen),
+                static_cast<unsigned long long>(badRecords),
+                static_cast<long long>(reader.ReadError()));
     std::printf("memory:   peak window within read-ahead + 1 segment: %s\n",
                 reader.PeakWindow() <= window ? "yes" : "no");
     ok = ok && header.count == withPayload && recordsSeen == withPayload
@@ -232,7 +234,8 @@ int main()
     scheduler->Destroy();
     TC::AsyncIo::DisableAsyncIo();
     TC::ConvertTaskToThread();
-    DeleteFileW(path);
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
     std::printf(ok ? "OK\n" : "FAILED\n");
     return ok ? 0 : 1;
 }

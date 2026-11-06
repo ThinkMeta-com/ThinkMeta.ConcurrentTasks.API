@@ -10,15 +10,13 @@
 
 module;
 
-#include <Windows.h>
-
 #include <atomic>
 #include <cstddef>
 
 export module ThinkMeta.ConcurrentTasks.Memory.SpscVirtualMemoryPipe;
 export import ThinkMeta.ConcurrentTasks.Memory.SequentialMemory;
 
-import ThinkMeta.ConcurrentTasks.Windows.VirtualMemory;
+import ThinkMeta.ConcurrentTasks.Platform.VirtualMemory;
 import ThinkMeta.ConcurrentTasks.Synchronization.ManualResetEvent;
 import ThinkMeta.ConcurrentTasks.Synchronization.AutoResetEvent;
 
@@ -38,7 +36,7 @@ namespace ThinkMeta::ConcurrentTasks::Memory {
     /// reserve, commit or decommit memory ends the process. The producer calls Initialize also for
     /// an empty stream, since GetSize waits for it.
     /// </remarks>
-    /// <seealso cref="Windows::VirtualMemory"/>
+    /// <seealso cref="Platform::VirtualMemory"/>
     export class SpscVirtualMemoryPipe : public IReadSequentialMemory, public IWriteSequentialMemory
     {
         SpscVirtualMemoryPipe(const SpscVirtualMemoryPipe&)            = delete;
@@ -117,7 +115,7 @@ namespace ThinkMeta::ConcurrentTasks::Memory {
             read_ += size;
             if (read_ >= CommitSize) {
                 auto sizeToDecommit = (read_ / CommitSize) * CommitSize;
-                Windows::ErrorException::ThrowIfFailed(Windows::VirtualMemory::Decommit(virtualMemory_.AtOffset(minCommitPosition_), sizeToDecommit));
+                Platform::ErrorException::ThrowIfFailed(Platform::VirtualMemory::Decommit(virtualMemory_.AtOffset(minCommitPosition_), sizeToDecommit));
                 minCommitPosition_ += sizeToDecommit;
                 read_ -= sizeToDecommit;
             }
@@ -132,10 +130,10 @@ namespace ThinkMeta::ConcurrentTasks::Memory {
         /// <remarks>Call once. Releases a consumer waiting in <see cref="GetSize"/>.</remarks>
         void Initialize(std::size_t initialSize) noexcept override
         {
-            // an empty stream reserves nothing (VirtualAlloc rejects a size of 0)
+            // an empty stream reserves nothing (VirtualAlloc and mmap reject a size of 0)
             auto reservedSize = ((initialSize + CommitSize - 1) / CommitSize) * CommitSize;
             if (reservedSize)
-                Windows::ErrorException::ThrowIfFailed(virtualMemory_.Reserve(reservedSize));
+                Platform::ErrorException::ThrowIfFailed(virtualMemory_.Reserve(reservedSize));
             memorySize_ = initialSize;
             sizeAvailableEvent_.Set();
         }
@@ -154,8 +152,7 @@ namespace ThinkMeta::ConcurrentTasks::Memory {
         {
             if (writePosition_ + size > maxCommitPosition_) {
                 auto sizeToCommit = ((writePosition_ + size - maxCommitPosition_ + CommitSize - 1) / CommitSize) * CommitSize;
-                Windows::ErrorException::ThrowIfFailed(
-                    Windows::VirtualMemory::Commit(virtualMemory_.AtOffset(maxCommitPosition_), sizeToCommit, PAGE_READWRITE));
+                Platform::ErrorException::ThrowIfFailed(Platform::VirtualMemory::Commit(virtualMemory_.AtOffset(maxCommitPosition_), sizeToCommit));
                 maxCommitPosition_ += sizeToCommit;
             }
 
@@ -185,10 +182,11 @@ namespace ThinkMeta::ConcurrentTasks::Memory {
         }
 
     private:
-        // Granularity of commit and decommit (also of the reservation): the allocation granularity.
+        // Granularity of commit and decommit (also of the reservation): the allocation granularity
+        // of Windows, a multiple of the page size elsewhere.
         static constexpr std::size_t CommitSize = 65536;
 
-        Windows::VirtualMemory                      virtualMemory_;
+        Platform::VirtualMemory                     virtualMemory_;
         mutable Synchronization::ManualResetEvent_s sizeAvailableEvent_;
         Synchronization::AutoResetEvent_s           readMemoryAvailableEvent_;
 

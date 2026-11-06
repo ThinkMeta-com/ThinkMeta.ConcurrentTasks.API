@@ -24,14 +24,14 @@
         <CT_CoreDir>$(MSBuildThisFileDirectory)</CT_CoreDir>
         <!-- Only the release build of the core is shipped, for all configurations: it imports no CRT,
              so it fits debug and release programs alike, and the library's asserts stay active in
-             the caller's debug build. -->
-        <CT_CoreConfiguration>Release</CT_CoreConfiguration>
+             the caller's debug build. The binaries sit in one folder per platform, named by its
+             runtime ID: bin\win-x64 here, bin/linux-x64 for the CMake config. -->
         <!-- In the repository the header sits next to this folder; in a NuGet package it sits
              inside it. Probing both keeps one file for both worlds. -->
         <CT_CoreIncludeDir Condition="Exists('$(CT_CoreDir)..\Include')">$(CT_CoreDir)..\Include</CT_CoreIncludeDir>
         <CT_CoreIncludeDir Condition="'$(CT_CoreIncludeDir)' == '' AND Exists('$(CT_CoreDir)include')">$(CT_CoreDir)include</CT_CoreIncludeDir>
-        <CT_CoreBinDir>$(CT_CoreDir)bin\$(Platform)\$(CT_CoreConfiguration)\</CT_CoreBinDir>
-        <CT_CoreLibDir>$(CT_CoreDir)lib\$(Platform)\$(CT_CoreConfiguration)\</CT_CoreLibDir>
+        <CT_CoreBinDir>$(CT_CoreDir)bin\win-$(Platform)\</CT_CoreBinDir>
+        <CT_CoreLibDir>$(CT_CoreDir)lib\win-$(Platform)\</CT_CoreLibDir>
         <CT_CoreDll>$(CT_CoreBinDir)ThinkMeta.ConcurrentTasks.Core.dll</CT_CoreDll>
     </PropertyGroup>
 
@@ -62,7 +62,7 @@
             Condition="'$(CT_CoreFlavor)' == 'Core' AND '$(ConfigurationType)' != 'StaticLibrary'"
             Inputs="$(CT_CoreDll)" Outputs="$(OutDir)ThinkMeta.ConcurrentTasks.Core.dll">
         <Error Condition="!Exists('$(CT_CoreDll)')"
-               Text="The core is not deployed for $(Platform)|$(CT_CoreConfiguration): $(CT_CoreDll) is missing. Deploy it from the internal repository, or set CT_CoreFlavor=Local." />
+               Text="The core is not deployed for win-$(Platform): $(CT_CoreDll) is missing. Deploy it from the internal repository, or set CT_CoreFlavor=Local." />
         <Copy SourceFiles="$(CT_CoreDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
     </Target>
 </Project>

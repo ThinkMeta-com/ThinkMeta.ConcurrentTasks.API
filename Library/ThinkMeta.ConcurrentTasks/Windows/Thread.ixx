@@ -11,6 +11,8 @@ module;
 
 #include <Windows.h>
 
+#include <utility>
+
 #include "Defs.h"
 
 export module ThinkMeta.ConcurrentTasks.Windows.Thread;

@@ -14,11 +14,11 @@ import ThinkMeta.ConcurrentTasks.Synchronization.Semaphore;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 import ThinkMeta.ConcurrentTasks.Tasks.WaitableTask;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::AsyncFile;
-using TC::Windows::Error;
+using TC::Platform::Error;
 using namespace Tutorial;
 // [/names]
 
@@ -71,15 +71,14 @@ public:
     bool Pack(TC::ITaskScheduler& scheduler, const Arguments& arguments,
               std::size_t slotCount)
     {
-        if (Error::Failed(input_.Create(arguments.input, GENERIC_READ,
-                                        FILE_SHARE_READ, OPEN_EXISTING,
-                                        FILE_FLAG_SEQUENTIAL_SCAN)))
+        if (Error::Failed(
+                input_.Create(arguments.input, TC::Platform::FileOptions{})))
             return false;
         File output = File::Create(arguments.output);
         if (!output.IsOpen())
             return false;
 
-        const bool failWrite = std::wcscmp(arguments.variant, L"fail-write") == 0;
+        const bool failWrite = IsVariant(arguments, "fail-write");
         scheduler_           = &scheduler;
         slotCount_           = slotCount;
         slots_               = std::make_unique<Slot[]>(slotCount);
@@ -121,14 +120,15 @@ public:
     {
         for (std::size_t block = 0;; ++block) {
             freeSlots_.Wait();
-            Slot& slot = slots_[block % slotCount_];
-            DWORD read = 0; // DWORD: Read's out parameter
+            Slot&                slot = slots_[block % slotCount_];
+            AsyncFile::ByteCount read = 0;
             if (!stopRequested) {
                 const std::uint64_t offset
                     = std::uint64_t{slot.buffer.size()} * block;
                 const auto error = input_.Read(
-                    slot.buffer.data(), static_cast<DWORD>(slot.buffer.size()),
-                    read, offset);
+                    slot.buffer.data(),
+                    static_cast<AsyncFile::ByteCount>(slot.buffer.size()), read,
+                    offset);
                 if (Error::Failed(error) && error != Error::EndOfFile)
                     readOk_ = false;
             }
@@ -162,31 +162,27 @@ void ReaderTask::Run() noexcept
 }
 
 // [ctrl-c]
-// Ctrl+C runs this on a thread that Windows creates - no task, no scheduler
-// thread. It only sets the flag; the pipeline then shuts down as after an
-// error.
-BOOL WINAPI OnConsoleCtrl(DWORD ctrlType) noexcept
+// Ctrl+C runs this outside every task - on a thread of its own (Windows) or
+// as a signal handler (Linux), no scheduler thread. It only sets the flag; the
+// pipeline then shuts down as after an error.
+void OnCtrlC() noexcept
 {
-    if (ctrlType != CTRL_C_EVENT)
-        return FALSE;
     stopRequested = true;
-    return TRUE;
 }
 // [/ctrl-c]
 
 // [main]
-int wmain(int argc, wchar_t* argv[])
+int main(int argc, char* argv[])
 {
     Arguments arguments;
     if (!ParseArguments(argc, argv, arguments))
         return arguments.exitCode;
 
-    const std::uint32_t threads   = arguments.threads != 0
-        ? arguments.threads
-        : GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-    const std::size_t   slotCount = std::size_t{4} * threads;
+    const std::uint32_t threads
+        = arguments.threads != 0 ? arguments.threads : ProcessorCount();
+    const std::size_t slotCount = std::size_t{4} * threads;
 
-    SetConsoleCtrlHandler(OnConsoleCtrl, TRUE);
+    HandleCtrlC(OnCtrlC);
     TC::ConvertThreadToTask();
     if (!TC::AsyncIo::EnableAsyncIo())
         return 1;
@@ -215,7 +211,7 @@ int wmain(int argc, wchar_t* argv[])
     TC::ConvertTaskToThread();
 
     if (!packed) {
-        DeleteFileW(arguments.output); // no half-written output
+        RemoveFile(arguments.output); // no half-written output
         std::printf("cannot pack the file\n");
         return 1;
     }

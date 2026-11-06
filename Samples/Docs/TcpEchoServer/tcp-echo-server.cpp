@@ -1,9 +1,13 @@
 // TCP echo server: a listening socket on 127.0.0.1, one task per accepted
 // connection that echoes what it receives, and client tasks in the same program
 // that check the echo.
-#define NOMINMAX
-#include <WinSock2.h>
-#include <Windows.h>
+// sockaddr_in, htonl, INADDR_LOOPBACK
+#if defined(_WIN32)
+#    include <WinSock2.h>
+#else
+#    include <arpa/inet.h>
+#    include <netinet/in.h>
+#endif
 
 #include <cstddef>
 #include <cstdint>
@@ -12,13 +16,15 @@
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncTcpSocket;
+import ThinkMeta.ConcurrentTasks.Platform.Socket;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
 
 namespace TC = ThinkMeta::ConcurrentTasks;
 using TC::AsyncIo::AsyncTcpSocket4;
-using TC::Windows::WinsockError;
-using TC::Windows::WinsockErrorCode;
+using TC::Platform::SocketError; // WSA codes on Windows, errno on Linux
+using TC::Platform::SocketErrorCode;
+using ByteCount = AsyncTcpSocket4::ByteCount;
 
 constexpr std::size_t Clients           = 4;
 constexpr std::size_t MessagesPerClient = 3;
@@ -35,18 +41,18 @@ std::byte MessageByte(std::size_t client, std::size_t message,
 }
 
 // Sends the whole buffer; a send may transfer less than asked.
-WinsockErrorCode SendAll(AsyncTcpSocket4& socket, const std::byte* data,
-                         std::uint32_t size) noexcept
+SocketErrorCode SendAll(AsyncTcpSocket4& socket, const std::byte* data,
+                        std::uint32_t size) noexcept
 {
     while (size > 0) {
-        DWORD                  sent  = 0;
-        const WinsockErrorCode error = socket.Send(data, size, &sent);
-        if (WinsockError::Failed(error))
+        ByteCount             sent  = 0;
+        const SocketErrorCode error = socket.Send(data, size, &sent);
+        if (SocketError::Failed(error))
             return error;
         data += sent;
         size -= sent;
     }
-    return WinsockError::Success;
+    return SocketError::Success;
 }
 
 // [echo]
@@ -63,11 +69,11 @@ public:
     {
         std::byte buffer[4096];
         for (;;) {
-            DWORD received = 0;
-            if (WinsockError::Failed(socket.Recv(buffer, sizeof(buffer), &received))
+            ByteCount received = 0;
+            if (SocketError::Failed(socket.Recv(buffer, sizeof(buffer), &received))
                 || received == 0)
                 break;
-            if (WinsockError::Failed(SendAll(socket, buffer, received)))
+            if (SocketError::Failed(SendAll(socket, buffer, received)))
                 break;
             echoed += received;
         }
@@ -89,14 +95,14 @@ public:
           group_(group)
     {}
 
-    WinsockErrorCode error = WinsockError::Success;
+    SocketErrorCode error = SocketError::Success;
 
     void Run() noexcept override
     {
         for (std::size_t i = 0; i < Clients; ++i) {
             AsyncTcpSocket4 connection; // Accept creates it
             error = listener_.Accept(connection);
-            if (WinsockError::Failed(error))
+            if (SocketError::Failed(error))
                 return;
             echoTasks_[i].socket = std::move(connection);
             group_.AddTask(&echoTasks_[i]);
@@ -124,13 +130,14 @@ public:
     void Run() noexcept override
     {
         AsyncTcpSocket4 socket;
-        // ConnectEx needs a bound socket: any port on the loopback address.
+        // Bound first, to any port on the loopback address: ConnectEx (Windows)
+        // needs it.
         sockaddr_in local{};
         local.sin_family      = AF_INET;
         local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        if (WinsockError::Failed(socket.Create())
-            || WinsockError::Failed(socket.Bind(local))
-            || WinsockError::Failed(socket.Connect(server)))
+        if (SocketError::Failed(socket.Create())
+            || SocketError::Failed(socket.Bind(local))
+            || SocketError::Failed(socket.Connect(server)))
             return;
 
         std::vector<std::byte> message;
@@ -139,7 +146,7 @@ public:
             message.resize(MessageSize(index, m));
             for (std::size_t i = 0; i < message.size(); ++i)
                 message[i] = MessageByte(index, m, i);
-            if (WinsockError::Failed(
+            if (SocketError::Failed(
                     SendAll(socket, message.data(),
                             static_cast<std::uint32_t>(message.size()))))
                 return;
@@ -148,8 +155,8 @@ public:
             echo.resize(message.size());
             std::size_t received = 0;
             while (received < echo.size()) {
-                DWORD bytes = 0;
-                if (WinsockError::Failed(socket.Recv(
+                ByteCount bytes = 0;
+                if (SocketError::Failed(socket.Recv(
                         echo.data() + received,
                         static_cast<std::uint32_t>(echo.size() - received), &bytes))
                     || bytes == 0)
@@ -162,9 +169,10 @@ public:
 
         // Graceful end: no more data from this side; the server's receive returns 0
         // bytes, it closes, and this side's receive returns 0 bytes too.
-        DWORD bytes = 0;
-        ok          = WinsockError::Succeeded(socket.Shutdown(SD_SEND))
-            && WinsockError::Succeeded(socket.Recv(echo.data(), 1, &bytes))
+        ByteCount bytes = 0;
+        ok              = SocketError::Succeeded(
+                              socket.Shutdown(TC::Platform::SocketShutdown::Send))
+            && SocketError::Succeeded(socket.Recv(echo.data(), 1, &bytes))
             && bytes == 0;
     }
 };
@@ -175,9 +183,9 @@ int main()
     TC::ConvertThreadToTask();
 
     // [startup]
-    // Winsock and its extension functions (AcceptEx, ConnectEx, ...), then the
-    // core's completion port.
-    if (WinsockError::Failed(TC::Windows::Socket::Startup()))
+    // Windows: Winsock and its extension functions (AcceptEx, ConnectEx, ...);
+    // nothing to do on Linux. Then the core's asynchronous I/O.
+    if (SocketError::Failed(TC::Platform::Socket::Startup()))
         return 1;
     if (!TC::AsyncIo::EnableAsyncIo())
         return 1;
@@ -198,10 +206,10 @@ int main()
         sockaddr_in     address{};
         address.sin_family      = AF_INET;
         address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        const bool listening    = WinsockError::Succeeded(listener.Create())
-            && WinsockError::Succeeded(listener.Bind(address))
-            && WinsockError::Succeeded(listener.Listen())
-            && WinsockError::Succeeded(listener.GetSockName(address));
+        const bool listening    = SocketError::Succeeded(listener.Create())
+            && SocketError::Succeeded(listener.Bind(address))
+            && SocketError::Succeeded(listener.Listen())
+            && SocketError::Succeeded(listener.GetSockName(address));
         // [/listen]
 
         // [objects]
@@ -230,7 +238,7 @@ int main()
             listener.Close(); // no Accept is pending any more
             // [/run]
 
-            ok                 = WinsockError::Succeeded(acceptTask.error);
+            ok                 = SocketError::Succeeded(acceptTask.error);
             std::size_t echoed = 0;
             for (std::size_t i = 0; i < Clients; ++i) {
                 std::printf("client %zu: %s\n", i,
@@ -248,7 +256,7 @@ int main()
     // [shutdown]
     // Every socket is closed, no operation is pending.
     TC::AsyncIo::DisableAsyncIo();
-    TC::Windows::Socket::Cleanup();
+    TC::Platform::Socket::Cleanup();
     // [/shutdown]
     TC::ConvertTaskToThread();
     std::printf("%s\n", ok ? "ok" : "FAILED");

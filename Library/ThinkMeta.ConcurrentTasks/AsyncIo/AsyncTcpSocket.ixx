@@ -2,57 +2,70 @@
 // Copyright (c) 2026 ThinkMeta Software GmbH
 //
 // AsyncTcpSocket: an IPv4/IPv6 TCP socket on top of AsyncSocket, with Accept and Connect
-// helpers that wrap AcceptEx/ConnectEx and apply the update-context options afterwards.
+// helpers. On Windows they wrap AcceptEx/ConnectEx and apply the update-context options
+// afterwards; elsewhere Accept takes over the descriptor the kernel's accept returns, and Connect
+// is AsyncSocket's own.
 //
 // Preliminary API: everything in this file is subject to change.
 //
 
 module;
 
-#include <WinSock2.h>
-#include <Windows.h>
+#include "Defs.h"
+
+#if defined(CT_PLATFORM_WINDOWS)
+#    include <WinSock2.h>
+#    include <Windows.h>
+#else
+#    include <sys/socket.h>
+#endif
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 
-#include "Defs.h"
-
 export module ThinkMeta.ConcurrentTasks.AsyncIo.AsyncTcpSocket;
 
-export import ThinkMeta.ConcurrentTasks.Windows.TcpSocket;
+export import ThinkMeta.ConcurrentTasks.Net.TcpSocket;
 export import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncIpSocket;
 
 namespace ThinkMeta::ConcurrentTasks::AsyncIo {
-    using Windows::IpVersion;
-    using Windows::IpVersionType;
-    using Windows::TcpSocketBase;
-    using Windows::IpTraits;
+    using Net::IpTraits;
+    using Net::IpVersion;
+    using Net::IpVersionType;
+    using Net::TcpSocketBase;
+#if defined(CT_PLATFORM_WINDOWS)
     using Windows::WinsockError;
     using Windows::WinsockErrorCode;
+#endif
 
     /// <summary>A TCP socket for overlapped I/O from tasks.</summary>
     /// <typeparam name="_IpVersion">
-    /// The IP version: <see cref="Windows::IpVersion::V4"/> or <see cref="Windows::IpVersion::V6"/>.
+    /// The IP version: <see cref="Net::IpVersion::V4"/> or <see cref="Net::IpVersion::V6"/>.
     /// </typeparam>
     /// <remarks>
-    /// <see cref="AsyncSocket"/> plus the TCP/IP options of <see cref="Windows::TcpSocketBase"/>/
-    /// <see cref="Windows::IpSocketBase"/>, for <see cref="Windows::IpVersion::V4"/> or V6.
-    /// Create() (no arguments, see <see cref="Windows::TcpSocketBase::Create"/>) creates an overlapped TCP socket
+    /// <see cref="AsyncSocket"/> plus the TCP/IP options of <see cref="Net::TcpSocketBase"/>/
+    /// <see cref="Net::IpSocketBase"/>, for <see cref="Net::IpVersion::V4"/> or V6.
+    /// Create() (no arguments, see <see cref="Net::TcpSocketBase::Create"/>) creates an overlapped TCP socket
     /// of the right address family and associates it with the core's completion port; needs
     /// <see cref="Windows::Socket::Startup"/> and <see cref="EnableAsyncIo"/>.
     /// The object owns the <c>SOCKET</c> and closes it on destruction.
     /// All the remarks of AsyncSocket apply (task-only waiting forms, timeouts, buffer lifetime).
+    /// Outside Windows the same: <c>Accept</c>, <c>Connect</c> and
+    /// <c>ConnectAsync</c> have the same forms, errors are <c>errno</c> values, and Connect needs no Bind.
     /// </remarks>
-    /// <seealso cref="Windows::TcpSocket"/>
+    /// <seealso cref="Net::TcpSocket"/>
     export template <IpVersionType _IpVersion>
     class AsyncTcpSocket : public TcpSocketBase<_IpVersion, AsyncSocket>
     {
         using _Base = TcpSocketBase<_IpVersion, AsyncSocket>;
         using _Traits = IpTraits<_IpVersion>;
 
+#if defined(CT_PLATFORM_WINDOWS)
         static constexpr std::uint32_t AddressBufferSize = sizeof(typename _Traits::SockAddr) + 16;
+#endif
 
     public:
         /// <summary>Creates an object without a socket.</summary>
@@ -67,6 +80,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <returns>This object.</returns>
         AsyncTcpSocket& operator=(AsyncTcpSocket&& other) noexcept = default;
 
+#if defined(CT_PLATFORM_WINDOWS)
         /// <summary>Accepts one connection on this listening socket.</summary>
         /// <param name="acceptSocket">
         /// Takes the connection. Must not hold a socket yet; Accept creates it. On failure it is closed again.
@@ -189,6 +203,30 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
             return this->ConnectAsync(&address, sizeof(address), nullptr, 0, nullptr, asyncIoRequest);
         }
+#else
+        /// <summary>Accepts one connection on this listening socket.</summary>
+        /// <param name="acceptSocket">Takes the connection. Must not hold a socket yet; on failure it still holds none.</param>
+        /// <param name="address">Optional; receives the peer's address.</param>
+        /// <param name="timeout">Limit for the wait; see <see cref="AsyncSocket"/> for the timeout rules.</param>
+        /// <returns>
+        /// <see cref="Posix::Error::Success"/>, <see cref="Posix::Error::TimedOut"/>, <see cref="Posix::Error::OperationAborted"/>
+        /// (task cancelled), or the <c>errno</c> of the accept.
+        /// </returns>
+        /// <remarks>
+        /// Task only; suspends the calling task. This socket must be created, bound and listening
+        /// (<see cref="Posix::Socket::Listen"/>). The kernel creates the new socket; it is taken over
+        /// by <paramref name="acceptSocket"/>, ready for use.
+        /// </remarks>
+        /// <seealso cref="AsyncSocket::AcceptAsync"/>
+        Posix::ErrorCode Accept(AsyncTcpSocket& acceptSocket, typename _Traits::SockAddr* address = nullptr, Duration timeout = Duration::Infinite()) noexcept
+        {
+            socklen_t length = sizeof(typename _Traits::SockAddr);
+            return this->AsyncSocket::Accept(acceptSocket, address, address ? &length : nullptr, timeout);
+        }
+
+        // Connect(address, timeout) and ConnectAsync(address, request) come from AsyncSocket, for
+        // the version's SockAddr as for any other address type; no Bind is needed before.
+#endif
     };
 
     /// <summary>Asynchronous IPv4 TCP socket.</summary>

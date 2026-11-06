@@ -1,8 +1,6 @@
 // Guide "Timeouts and timers": EnableTimers, Wait with a timeout, starting a task
 // later, cancelling and advancing a timed start, DisableTimers. Checks its own
 // results outside the regions that the guide shows.
-#include <Windows.h>
-
 #include <chrono>
 #include <cstdio>
 

@@ -8,10 +8,9 @@
 //
 module;
 
-#include <Windows.h>
-
 #include <atomic>
 #include <concepts>
+#include <cstddef>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 
@@ -85,7 +84,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         /// <summary>Enters the lock, waiting for it if necessary.</summary>
         /// <remarks>
         /// Suspends the calling task while another task holds the lock. Recursive.
-        /// <see cref="CriticalSection_s"/> may spin briefly (<c>YieldProcessor</c>) during a hand-off
+        /// <see cref="CriticalSection_s"/> may spin briefly (the processor's <c>pause</c>) during a hand-off
         /// instead.
         /// </remarks>
         /// <seealso cref="TryEnter"/>
@@ -109,7 +108,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
                     // suspend into the one slot.
                     if (auto observed = lockingTaskContext_.load(std::memory_order_relaxed);
                         observed == reinterpret_cast<TaskHandle>(1) || observed == nullptr) {
-                        YieldProcessor();
+                        CT_PAUSE();
                         continue;
                     }
                 }
@@ -229,7 +228,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// The critical section type: <see cref="CriticalSection"/> or <see cref="CriticalSection_s"/>.
     /// </typeparam>
     /// <remarks>
-    /// Up to spinCount <see cref="_CriticalSection::TryEnter"/> attempts (with <c>YieldProcessor</c>
+    /// Up to spinCount <see cref="_CriticalSection::TryEnter"/> attempts (with the processor's <c>pause</c>
     /// in between, the thread is not given up), then a suspending
     /// <see cref="_CriticalSection::Enter"/>. <see cref="_CriticalSection::Leave"/> on destruction.
     /// Task or converted thread only.
@@ -252,7 +251,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
                 if (criticalSection_.TryEnter())
                     break;
 
-                YieldProcessor();
+                CT_PAUSE();
                 --spinCount;
             }
 

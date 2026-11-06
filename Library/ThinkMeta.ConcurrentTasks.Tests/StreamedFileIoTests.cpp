@@ -1,15 +1,13 @@
 #include "pch.h"
 #include "TestHelpers.h"
 
-#define NOMINMAX
-#include <Windows.h>
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -18,9 +16,9 @@
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncFile;
 import ThinkMeta.ConcurrentTasks.AsyncIo.StreamedFileReader;
 import ThinkMeta.ConcurrentTasks.AsyncIo.OrderedFileWriter;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
 
 using namespace Microsoft::VisualStudio::CppUnitTestFramework;
 
@@ -28,45 +26,14 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
     namespace {
 
-        std::wstring TempPath(const wchar_t* prefix)
-        {
-            wchar_t dir[MAX_PATH];
-            wchar_t file[MAX_PATH];
-            ::GetTempPathW(MAX_PATH, dir);
-            ::GetTempFileNameW(dir, prefix, 0, file);
-            return file;
-        }
-
         std::uint8_t PatternByte(std::uint64_t i) noexcept { return static_cast<std::uint8_t>((i * 2654435761ull) >> 13); }
 
-        void WritePatternFile(const std::wstring& path, std::uint64_t size)
+        void WritePatternFile(const std::filesystem::path& path, std::uint64_t size)
         {
-            HANDLE h = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-            Assert::IsTrue(h != INVALID_HANDLE_VALUE, L"cannot create the test file");
-            std::vector<std::uint8_t> chunk(1 << 20);
-            for (std::uint64_t pos = 0; pos < size;) {
-                const auto n = static_cast<DWORD>(std::min<std::uint64_t>(chunk.size(), size - pos));
-                for (DWORD k = 0; k < n; ++k)
-                    chunk[k] = PatternByte(pos + k);
-                DWORD written = 0;
-                Assert::IsTrue(::WriteFile(h, chunk.data(), n, &written, nullptr) && written == n);
-                pos += n;
-            }
-            ::CloseHandle(h);
-        }
-
-        std::vector<std::uint8_t> ReadWholeFile(const std::wstring& path)
-        {
-            HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-            Assert::IsTrue(h != INVALID_HANDLE_VALUE, L"cannot open the output file");
-            LARGE_INTEGER size;
-            ::GetFileSizeEx(h, &size);
-            std::vector<std::uint8_t> data(static_cast<std::size_t>(size.QuadPart));
-            DWORD                     read = 0;
-            if (!data.empty())
-                Assert::IsTrue(::ReadFile(h, data.data(), static_cast<DWORD>(data.size()), &read, nullptr) && read == data.size());
-            ::CloseHandle(h);
-            return data;
+            std::vector<std::uint8_t> data(static_cast<std::size_t>(size));
+            for (std::size_t i = 0; i < data.size(); ++i)
+                data[i] = PatternByte(i);
+            Assert::IsTrue(WriteTestFile(path, data.data(), data.size()), L"cannot write the test file");
         }
 
         class Rng
@@ -92,6 +59,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
         public:
             explicit IoScope(DWORD threads)
             {
+                SkipWithoutAsyncIo();
                 ConvertThreadToTask();
                 scheduler_ = std::make_unique<ScopedScheduler>(SchedulerInfo{.numberOfThreads = threads});
                 scheduler_->Start();
@@ -113,7 +81,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
         /// <summary>Streams a pattern file, checks every byte and the read-ahead bound; returns an error text or "".</summary>
         std::wstring RunReader(DWORD threads, bool unbuffered, std::uint64_t size)
         {
-            const std::wstring path = TempPath(L"ctR");
+            const auto path = TempFilePath("ctR");
             WritePatternFile(path, size);
             std::wstring failure;
             {
@@ -124,8 +92,10 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 settings.readAhead     = 512 * 1024;
                 settings.readsInFlight = 3;
                 settings.unbuffered    = unbuffered;
-                if (Windows::Error::Failed(reader.Open(path.c_str(), settings, 2)))
+                if (Platform::Error::Failed(reader.Open(path.c_str(), settings, 2))) {
+                    DeleteTestFile(path);
                     return L"Open failed";
+                }
 
                 std::atomic<bool> done{false};
                 std::atomic<int>  mismatch{0};
@@ -155,6 +125,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
                 Synchronization::TaskGroup group;
                 group.AddTask(&reader);
+                group.AddTask(&consumer); // a task must not go before its OnTaskExited
                 io.Scheduler().AddTask(&reader, TaskPriority::Normal);
                 io.Scheduler().AddTask(&consumer, TaskPriority::Normal);
                 if (!WaitFor([&] { return done.load(std::memory_order_acquire); }, std::chrono::seconds(30)))
@@ -165,12 +136,12 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                     failure = L"byte mismatch";
                 else if (mismatch.load() == -1)
                     failure = L"Wait returned too early";
-                else if (Windows::Error::Failed(reader.ReadError()))
+                else if (Platform::Error::Failed(reader.ReadError()))
                     failure = L"read error";
                 else if (reader.PeakWindow() > settings.readAhead + 2 * settings.segmentSize)
                     failure = L"read-ahead window exceeded: " + std::to_wstring(reader.PeakWindow());
             }
-            ::DeleteFileW(path.c_str());
+            DeleteTestFile(path);
             return failure;
         }
 
@@ -180,8 +151,8 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
         /// </summary>
         std::wstring RunWriter(DWORD threads, std::uint32_t copyTasks, bool unbuffered, std::uint64_t seed)
         {
-            const std::wstring path = TempPath(L"ctW");
-            std::wstring       failure;
+            const auto   path = TempFilePath("ctW");
+            std::wstring failure;
 
             std::vector<std::uint8_t> source(3 << 20);
             for (std::size_t i = 0; i < source.size(); ++i)
@@ -212,7 +183,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 std::atomic<bool> done{false};
                 std::atomic<int>  problem{0};
                 auto              producer = Tasks::Task::Create([&] {
-                    if (Windows::Error::Failed(writer.Open(path.c_str(), 32 << 20, settings))) {
+                    if (Platform::Error::Failed(writer.Open(path.c_str(), 32 << 20, settings))) {
                         problem.store(1);
                         writer.Close();
                         done.store(true, std::memory_order_release);
@@ -258,6 +229,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                         problem.store(3);
                     done.store(true, std::memory_order_release);
                 });
+                group.AddTask(&producer); // a task must not go before its OnTaskExited
                 io.Scheduler().AddTask(&producer, TaskPriority::Normal);
                 if (!WaitFor([&] { return done.load(std::memory_order_acquire); }, std::chrono::seconds(60)))
                     failure = L"producer timed out";
@@ -273,7 +245,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                     failure = L"size differs";
             }
             if (failure.empty()) {
-                const auto actual = ReadWholeFile(path);
+                const auto actual = ReadTestFile(path);
                 if (actual.size() != expected.size())
                     failure = L"file size " + std::to_wstring(actual.size()) + L" instead of " + std::to_wstring(expected.size());
                 else if (actual != expected) {
@@ -281,7 +253,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                     failure       = L"content differs at " + std::to_wstring(at);
                 }
             }
-            ::DeleteFileW(path.c_str());
+            DeleteTestFile(path);
             return failure;
         }
 
@@ -306,24 +278,26 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
 
         TEST_METHOD (ReaderStopReleasesWaiter)
         {
-            const std::wstring path = TempPath(L"ctR");
+            SkipWithoutAsyncIo();
+            const auto path = TempFilePath("ctR");
             WritePatternFile(path, 3 << 20);
             {
                 IoScope                     io(2);
                 AsyncIo::StreamedFileReader reader;
-                Assert::IsTrue(Windows::Error::Succeeded(reader.Open(path.c_str())));
+                Assert::IsTrue(Platform::Error::Succeeded(reader.Open(path.c_str())));
                 reader.Stop();
                 std::atomic<std::uint64_t> got{~std::uint64_t{0}};
                 auto                       waiter = Tasks::Task::Create([&] { got.store(reader.Wait(reader.Size())); });
                 Synchronization::TaskGroup group;
                 group.AddTask(&reader);
+                group.AddTask(&waiter); // a task must not go before its OnTaskExited
                 io.Scheduler().AddTask(&reader, TaskPriority::Normal);
                 io.Scheduler().AddTask(&waiter, TaskPriority::Normal);
                 Assert::IsTrue(WaitFor([&] { return got.load() != ~std::uint64_t{0}; }, std::chrono::seconds(10)), L"waiter hangs after Stop");
                 group.Wait();
                 Assert::IsTrue(got.load() < reader.Size());
             }
-            ::DeleteFileW(path.c_str());
+            DeleteTestFile(path);
         }
 
         TEST_METHOD (WriterBuildsTheExactFile)
@@ -351,6 +325,7 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 writer.Close();
                 closed.store(true);
             });
+            group.AddTask(&closer); // a task must not go before its OnTaskExited
             io.Scheduler().AddTask(&closer, TaskPriority::Normal);
             Assert::IsTrue(WaitFor([&] { return closed.load(); }, std::chrono::seconds(10)), L"Close without Open hangs");
             group.Wait();

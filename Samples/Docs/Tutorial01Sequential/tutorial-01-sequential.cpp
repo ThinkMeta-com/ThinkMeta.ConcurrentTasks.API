@@ -46,7 +46,7 @@ bool Pack(const Arguments& arguments, StageTimes& times)
 // [/pack]
 
 // [main]
-int wmain(int argc, wchar_t* argv[])
+int main(int argc, char* argv[])
 {
     Arguments arguments;
     if (!ParseArguments(argc, argv, arguments))

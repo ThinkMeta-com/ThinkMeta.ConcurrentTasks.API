@@ -10,6 +10,7 @@ module;
 
 #include <atomic>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
@@ -129,7 +130,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// <seealso cref="AutoResetEvent"/>
     /// <seealso cref="ManualResetEvent_s"/>
     template <>
-    class _AutoResetEvent<SuspensionKind::Single> : private ISuspendCallback
+    class _AutoResetEvent<SuspensionKind::Single> final : private ISuspendCallback
     {
         // State and waiter share one word, so that the operation that lets the waiter pass is the
         // last access to the event - by Set, by OnSuspended and by OnWithdraw alike. There is no
@@ -254,7 +255,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
             return state_.compare_exchange_strong(expected, ResetState, std::memory_order_acq_rel, std::memory_order_acquire);
         }
 
-        // 0 reset, 1 set, otherwise the waiting task (reset): a task handle is an aligned SLIST_ENTRY
+        // 0 reset, 1 set, otherwise the waiting task (reset): a task handle is a 16-byte aligned ListEntry
         // and never 0 or 1.
         static constexpr std::uintptr_t ResetState = 0;
         static constexpr std::uintptr_t SetState   = 1;

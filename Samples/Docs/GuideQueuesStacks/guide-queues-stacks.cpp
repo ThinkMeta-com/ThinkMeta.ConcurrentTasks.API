@@ -2,8 +2,6 @@
 // BoundedPointerQueue and two semaphores, a free list of nodes on a
 // ConcurrentStack, BasicStack, and Padded statistics. Checks its own results
 // outside the regions that the guide shows.
-#include <Windows.h>
-
 #include <cstdint>
 #include <cstdio>
 
@@ -23,9 +21,9 @@ using TC::Synchronization::Semaphore;
 // [/names]
 
 // [node]
-// A job that can sit on a ConcurrentStack: derived from SLIST_ENTRY and aligned to
-// 16 bytes (MEMORY_ALLOCATION_ALIGNMENT on x64), as the Windows SList requires.
-struct alignas(MEMORY_ALLOCATION_ALIGNMENT) Job : SLIST_ENTRY {
+// A job that can sit on a ConcurrentStack: derived from ListEntry, which carries
+// the link and the 16-byte alignment the lock-free stack requires.
+struct Job : TC::ListEntry {
     int orderId = 0;
     int amount  = 0;
 };
@@ -57,7 +55,7 @@ public:
         jobs_.Wait(); // a job is in the queue
         Job* job;
         while ((job = queue_.Dequeue()) == nullptr)
-            YieldProcessor(); // nullptr under contention means "try again"
+            TC::YieldTask(); // nullptr under contention means "try again"
         free_.Release();
         return job;
     }
@@ -166,7 +164,8 @@ int main()
         = std::uint64_t{Producers} * PerTask / 10 * 55;
     const bool jobsOk
         = jobs == std::uint64_t{Producers} * PerTask && amount == expectedAmount;
-    std::printf("jobs:       %llu handled, amounts %s\n", jobs,
+    std::printf("jobs:       %llu handled, amounts %s\n",
+                static_cast<unsigned long long>(jobs),
                 amount == expectedAmount ? "match" : "differ");
 
     const auto before = pool.Size();

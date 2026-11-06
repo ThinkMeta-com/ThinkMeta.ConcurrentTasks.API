@@ -1,7 +1,5 @@
 // Ping-pong: two tasks hand the processor back and forth through two semaphores and
 // count the round trips per second.
-#include <Windows.h>
-
 #include <chrono>
 #include <cstddef>
 #include <cstdio>

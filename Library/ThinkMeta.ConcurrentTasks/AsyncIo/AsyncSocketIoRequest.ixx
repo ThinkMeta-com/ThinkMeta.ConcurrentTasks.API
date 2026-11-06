@@ -1,45 +1,60 @@
 //
 // Copyright (c) 2026 ThinkMeta Software GmbH
 //
-// The request objects of AsyncSocket operations: AsyncSocketIoRequest carries the OVERLAPPED and
-// the result (WinsockErrorCode, bytes) of one operation; the Waitable variants add an event a
-// task can wait on, and AsyncSocketRecvIoRequest also captures the receive result flags.
+// The request objects of AsyncSocket operations: AsyncSocketIoRequest carries the OVERLAPPED
+// (Windows) or IoRequest (elsewhere) and the result (error code, bytes) of one operation; the
+// Waitable variants add an event a task can wait on, and AsyncSocketRecvIoRequest (Windows)
+// also captures the receive result flags.
 //
 // Preliminary API: everything in this file is subject to change.
 //
 
 module;
 
-#include <WinSock2.h>
+#include "Defs.h"
+
+#if defined(CT_PLATFORM_WINDOWS)
+#    include <WinSock2.h>
+#endif
 
 #include <concepts>
 #include <utility>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 
-#include "Defs.h"
-
 export module ThinkMeta.ConcurrentTasks.AsyncIo.AsyncSocketIoRequest;
 
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncIoRequest;
+#if defined(CT_PLATFORM_WINDOWS)
 import ThinkMeta.ConcurrentTasks.Windows.WinsockError;
+#else
+import ThinkMeta.ConcurrentTasks.Posix.Error;
+#endif
 import ThinkMeta.ConcurrentTasks.Synchronization.ManualResetEvent;
 
 namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     using Synchronization::_ManualResetEvent;
     using Synchronization::SuspensionKind;
 
-    /// <summary>The state of one overlapped socket operation.</summary>
+    // the error type of the socket operations: WSA codes on Windows, errno elsewhere
+#if defined(CT_PLATFORM_WINDOWS)
+    using _SocketErrorCode = Windows::WinsockErrorCode;
+#else
+    using _SocketErrorCode = Posix::ErrorCode;
+#endif
+
+    /// <summary>The state of one asynchronous socket operation.</summary>
     /// <remarks>
-    /// Holds its <c>OVERLAPPED</c>, the bytes transferred and the <see cref="Windows::WinsockErrorCode"/> it
-    /// completed with. Not usable on its own: use a Waitable variant below (<see cref="WaitableAsyncSocketIoRequest"/>,
+    /// Holds its <c>OVERLAPPED</c> (Windows) or <see cref="IoRequest"/> (elsewhere), the bytes transferred
+    /// and the error code it completed with (<see cref="Windows::WinsockErrorCode"/> on Windows, an
+    /// <c>errno</c> elsewhere). Not usable on its own: use a Waitable variant below (<see cref="WaitableAsyncSocketIoRequest"/>,
     /// <see cref="WaitableAsyncSocketIoRequest_s"/>), or an own request type that reacts to the completion
     /// in <see cref="RequestCompleted"/>. The owner keeps the request alive and in place from the start of
     /// the operation until RequestCompleted has run; it can be reused for another operation after
     /// <see cref="AsyncIoRequest::Reset"/>.
     /// </remarks>
     /// <seealso cref="AsyncSocket"/>
-    export class CT_NOVTABLE AsyncSocketIoRequest : public AsyncIoRequest<Windows::WinsockErrorCode>
+    export class CT_NOVTABLE AsyncSocketIoRequest : public AsyncIoRequest<_SocketErrorCode>
     {
         AsyncSocketIoRequest(const AsyncSocketIoRequest&)            = delete;
         AsyncSocketIoRequest(AsyncSocketIoRequest&&)                 = delete;
@@ -48,20 +63,28 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
 
     public:
         /// <summary>Records the operation's result.</summary>
-        /// <param name="error">The operation's own Win32/WSA error code; <c>ERROR_SUCCESS</c> (<c>0</c>) on success.</param>
-        /// <param name="bytesTransferred">Bytes the operation transferred.</param>
+        /// <param name="error">
+        /// The operation's own error code (Win32/WSA on Windows, <c>errno</c> elsewhere); <c>0</c> on success.
+        /// </param>
+        /// <param name="bytesTransferred">
+        /// Bytes the operation transferred; for an accept outside Windows, the new socket's descriptor.
+        /// </param>
         /// <remarks>
         /// Called exactly once per operation: on the starting thread when the operation completed
-        /// synchronously, otherwise on the core's I/O thread. Completion handling in an own request type
-        /// must be short and must not block or suspend.
+        /// synchronously (Windows only), otherwise on the core's I/O thread. Completion handling in an own
+        /// request type must be short and must not block or suspend.
         /// </remarks>
-        void RequestCompleted(DWORD error, DWORD bytesTransferred) noexcept override
+        void RequestCompleted(CompletionError error, ByteCount bytesTransferred) noexcept override
         {
             SetTransferredBytes(bytesTransferred);
+#if defined(CT_PLATFORM_WINDOWS)
             // A failed packet carries the Win32 form of the operation's NTSTATUS (ERROR_NETNAME_DELETED
             // for a reset), not the WSAE* code a synchronous failure reports; the status in the
             // OVERLAPPED gives the Winsock code back (see WinsockError::FromOverlapped).
             SetError(Windows::WinsockError::FromOverlapped(GetOverlapped(), static_cast<Windows::WinsockErrorCode>(error)));
+#else
+            SetError(error);
+#endif
         }
 
     protected:
@@ -70,6 +93,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         AsyncSocketIoRequest() noexcept = default;
     };
 
+#if defined(CT_PLATFORM_WINDOWS)
     /// <summary>A request for receive operations that also captures the result flags.</summary>
     /// <remarks>
     /// The flags (<c>MSG_PARTIAL</c>, <c>MSG_TRUNC</c>, ...) are available once the operation has completed
@@ -94,13 +118,14 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <param name="error">The operation's own Win32/WSA error code; <c>ERROR_SUCCESS</c> (<c>0</c>) on success.</param>
         /// <param name="bytesTransferred">Bytes the operation transferred.</param>
         /// <remarks>The flags are read with <c>WSAGetOverlappedResult</c>.</remarks>
-        void RequestCompleted(DWORD error, DWORD bytesTransferred) noexcept override
+        void RequestCompleted(CompletionError error, ByteCount bytesTransferred) noexcept override
         {
             AsyncSocketIoRequest::RequestCompleted(error, bytesTransferred);
 
             if (Windows::WinsockError::Succeeded(error)) {
-                auto& overlapped = GetOverlapped();
-                WSAGetOverlappedResult(socket_, &overlapped, &bytesTransferred, false, &flags_);
+                auto& overlapped  = GetOverlapped();
+                DWORD transferred = 0; // asked for the flags only
+                WSAGetOverlappedResult(socket_, &overlapped, &transferred, false, &flags_);
             }
         }
 
@@ -121,6 +146,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         SOCKET socket_;
         DWORD  flags_ = 0;
     };
+#endif
 
     /// <summary>Satisfied by <see cref="AsyncSocketIoRequest"/> and every class derived from it.</summary>
     /// <typeparam name="T">The type to test.</typeparam>
@@ -152,6 +178,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         // own constructors instead of inheriting the base's: inherited ones would keep their
         // protected access
 
+#if defined(CT_PLATFORM_WINDOWS)
         /// <summary>Creates an idle request.</summary>
         _WaitableAsyncSocketIoRequest() noexcept
             requires(!std::derived_from<_AsyncSocketIoRequest, AsyncSocketRecvIoRequest>)
@@ -164,12 +191,16 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
             : _AsyncSocketIoRequest(socket)
         {
         }
+#else
+        /// <summary>Creates an idle request.</summary>
+        _WaitableAsyncSocketIoRequest() noexcept = default;
+#endif
 
         /// <summary>Records the result, then sets the event.</summary>
-        /// <param name="error">The operation's own Win32/WSA error code; <c>ERROR_SUCCESS</c> (<c>0</c>) on success.</param>
+        /// <param name="error">The operation's own error code; <c>0</c> on success.</param>
         /// <param name="bytesTransferred">Bytes the operation transferred.</param>
         /// <remarks>Setting the event is the last access on behalf of the completion.</remarks>
-        void RequestCompleted(DWORD error, DWORD bytesTransferred) noexcept override
+        void RequestCompleted(AsyncIoRequestBase::CompletionError error, AsyncIoRequestBase::ByteCount bytesTransferred) noexcept override
         {
             _AsyncSocketIoRequest::RequestCompleted(error, bytesTransferred);
             event_.Set();
@@ -224,6 +255,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// <seealso cref="WaitableAsyncSocketIoRequest"/>
     export using WaitableAsyncSocketIoRequest_s = _WaitableAsyncSocketIoRequest<AsyncSocketIoRequest, SuspensionKind::Single>;
 
+#if defined(CT_PLATFORM_WINDOWS)
     /// <summary>Waitable receive request, any number of waiting tasks (Multiple).</summary>
     /// <remarks>Captures the result flags (see <see cref="AsyncSocketRecvIoRequest"/>).</remarks>
     /// <seealso cref="WaitableAsyncSocketRecvIoRequest_s"/>
@@ -244,4 +276,14 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
     /// </remarks>
     export template <typename T>
     concept WaitableAsyncSocketIoRequestType = std::same_as<T, WaitableAsyncSocketIoRequest_s> || std::same_as<T, WaitableAsyncSocketRecvIoRequest_s>;
+#else
+    /// <summary>Satisfied by the single-waiter request type, <see cref="WaitableAsyncSocketIoRequest_s"/>.</summary>
+    /// <typeparam name="T">The type to test.</typeparam>
+    /// <remarks>
+    /// Accepted by <see cref="AsyncSocket"/>'s waiting helpers. Outside Windows there is no receive request
+    /// with result flags (the receives with flags are Windows only).
+    /// </remarks>
+    export template <typename T>
+    concept WaitableAsyncSocketIoRequestType = std::same_as<T, WaitableAsyncSocketIoRequest_s>;
+#endif
 } // namespace ThinkMeta::ConcurrentTasks::AsyncIo

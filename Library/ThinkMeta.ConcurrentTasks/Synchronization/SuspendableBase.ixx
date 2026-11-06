@@ -103,10 +103,10 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         void Resume() noexcept
         {
             // The flush is the last access to the object; from here on only the chain is used, and
-            // an item's Next is read before the item is resumed, since the core owns the entry then.
+            // an item's next is read before the item is resumed, since the core owns the entry then.
             auto taskContext = suspendedTasks_.Flush();
             while (taskContext) {
-                auto next = static_cast<SuspendedTask>(taskContext->Next);
+                auto next = static_cast<SuspendedTask>(std::atomic_ref<ListEntry*>(taskContext->next).load(std::memory_order_relaxed)); // as Pop reads it
                 ResumeTask(taskContext);
                 taskContext = next;
             }
@@ -156,8 +156,8 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
 
         /// <summary>Returns the number of suspended tasks.</summary>
         /// <returns>The number of tasks suspended on the object, at most 65535.</returns>
-        /// <remarks>A snapshot (<c>QueryDepthSList</c>).</remarks>
-        [[nodiscard]] unsigned short GetNumSuspendedTasks() const noexcept { return suspendedTasks_.Size(); }
+        /// <remarks>A snapshot of the stack's depth, which counts modulo 65536.</remarks>
+        [[nodiscard]] std::uint16_t GetNumSuspendedTasks() const noexcept { return suspendedTasks_.Size(); }
 
         /// <summary>Publishes a suspended task.</summary>
         /// <param name="suspendedTask">

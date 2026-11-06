@@ -8,10 +8,9 @@
 //
 module;
 
-#include <Windows.h>
-
 #include <atomic>
 #include <concepts>
+#include <cstddef>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 
@@ -200,7 +199,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// The semaphore type: <see cref="Semaphore"/> or <see cref="Semaphore_s"/>.
     /// </typeparam>
     /// <remarks>
-    /// Up to spinCount <see cref="_Semaphore::TryWait"/> attempts (with <c>YieldProcessor</c> in
+    /// Up to spinCount <see cref="_Semaphore::TryWait"/> attempts (with the processor's <c>pause</c> in
     /// between, the thread is not given up), then a suspending <see cref="_Semaphore::Wait"/>.
     /// Releases one permit on destruction. Task or converted thread only.
     /// </remarks>
@@ -221,7 +220,7 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
                 if (semaphore_.TryWait())
                     break;
 
-                YieldProcessor();
+                CT_PAUSE();
                 --spinCount;
             }
 

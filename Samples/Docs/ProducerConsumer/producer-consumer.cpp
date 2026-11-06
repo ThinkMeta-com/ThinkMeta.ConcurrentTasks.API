@@ -1,9 +1,6 @@
 // Producer/consumer: producer tasks pass work items to consumer tasks through a
 // BoundedPointerQueue. Semaphores count the items, because the queue itself never
 // waits.
-#define NOMINMAX
-#include <Windows.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -70,7 +67,7 @@ private:
         // a moment while another task takes the head item: just try again.
         WorkItem* item;
         while ((item = queue.Dequeue()) == nullptr)
-            YieldProcessor();
+            TC::YieldTask();
         return item;
     }
 

@@ -1,5 +1,3 @@
-#include <Windows.h>
-
 #include <cstddef>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>

@@ -113,7 +113,7 @@ namespace ThinkMeta::ConcurrentTasks::Schedulers {
             // to the calling thread - often a worker - and report success.
             CT_ASSERT(self->window_ != nullptr);
             if (self->window_ == nullptr || !PostMessageW(self->window_, self->message_, 0, reinterpret_cast<LPARAM>(task)))
-                __fastfail(FAST_FAIL_FATAL_APP_EXIT);
+                CT_FASTFAIL();
         }
 
         IDispatcherScheduler* scheduler_;

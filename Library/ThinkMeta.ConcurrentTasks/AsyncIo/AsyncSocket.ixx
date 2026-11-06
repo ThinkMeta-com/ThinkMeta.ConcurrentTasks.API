@@ -17,6 +17,8 @@ module;
 
 #include <MSWSock.h>
 
+#include <cstddef>
+
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 
 #include "Defs.h"
@@ -80,6 +82,9 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         using WinsockErrorCode = Windows::WinsockErrorCode;
 
     public:
+        /// <summary>A byte count of one operation, as on Linux; the Win32-shaped overloads keep <c>DWORD</c>.</summary>
+        using ByteCount = AsyncIoRequestBase::ByteCount;
+
         /// <summary>Creates the socket and associates it with the core's completion port.</summary>
         /// <param name="addressFamily">The address family, e.g. <c>AF_INET</c> or <c>AF_INET6</c>.</param>
         /// <param name="type">The socket type, e.g. <c>SOCK_STREAM</c> or <c>SOCK_DGRAM</c>.</param>
@@ -540,9 +545,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// class remarks).
         /// </returns>
         /// <remarks>See the <c>WSABUF</c> overload.</remarks>
-        WinsockErrorCode RecvAsync(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
+        WinsockErrorCode RecvAsync(void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            return HandleCompletedRequest(RecvAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
+            return StartCounted(bytesTransferred, asyncIoRequest,
+                                [&](DWORD* count) noexcept { return RecvAsync(buffer, bufferSize, count, asyncIoRequest.GetOverlapped()); });
         }
 
         /// <summary>Receives into one buffer with <c>WSARecv</c> without flags.</summary>
@@ -565,7 +571,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// stream socket: the peer closed the connection. With a timeout, a receive that times out is
         /// cancelled and returns <see cref="WinsockError::TimedOut"/>.
         /// </remarks>
-        WinsockErrorCode Recv(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
+        WinsockErrorCode Recv(void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
         {
             WaitableAsyncSocketIoRequest_s asyncIoRequest;
 
@@ -690,9 +696,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// class remarks).
         /// </returns>
         /// <remarks>The buffer must stay valid until completion.</remarks>
-        WinsockErrorCode SendAsync(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD flags, AsyncSocketIoRequest& asyncIoRequest) noexcept
+        WinsockErrorCode SendAsync(const void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, DWORD flags, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            return HandleCompletedRequest(SendAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
+            return StartCounted(bytesTransferred, asyncIoRequest,
+                                [&](DWORD* count) noexcept { return SendAsync(buffer, bufferSize, count, flags, asyncIoRequest.GetOverlapped()); });
         }
 
         /// <summary>Sends one buffer with <c>WSASend</c>.</summary>
@@ -712,7 +719,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
-        WinsockErrorCode Send(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD flags,
+        WinsockErrorCode Send(const void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, DWORD flags,
                               Duration timeout = Duration::Infinite()) noexcept
         {
             WaitableAsyncSocketIoRequest_s asyncIoRequest;
@@ -737,9 +744,10 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// class remarks).
         /// </returns>
         /// <remarks>The buffer must stay valid until completion.</remarks>
-        WinsockErrorCode SendAsync(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
+        WinsockErrorCode SendAsync(const void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
-            return HandleCompletedRequest(SendAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest.GetOverlapped()), bytesTransferred, asyncIoRequest);
+            return StartCounted(bytesTransferred, asyncIoRequest,
+                                [&](DWORD* count) noexcept { return SendAsync(buffer, bufferSize, count, asyncIoRequest.GetOverlapped()); });
         }
 
         /// <summary>Sends one buffer with <c>WSASend</c> without flags.</summary>
@@ -758,7 +766,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// (<see cref="CancelTask"/>), or the operation's WSA error.
         /// </returns>
         /// <remarks>Task only; suspends the calling task until the operation has completed.</remarks>
-        WinsockErrorCode Send(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
+        WinsockErrorCode Send(const void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
         {
             WaitableAsyncSocketIoRequest_s asyncIoRequest;
 
@@ -822,7 +830,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <summary>Starts a <c>WSARecvFrom</c> into one buffer without flags or sender address.</summary>
         /// <remarks>Without an address the same as <see cref="RecvAsync"/> with the same arguments, which it calls.</remarks>
         /// <seealso cref="RecvAsync"/>
-        WinsockErrorCode RecvFromAsync(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
+        WinsockErrorCode RecvFromAsync(void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
             return RecvAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest);
         }
@@ -830,7 +838,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <summary>Receives into one buffer with <c>WSARecvFrom</c> without flags or sender address.</summary>
         /// <remarks>Without an address the same as <see cref="Recv"/> with the same arguments, which it calls.</remarks>
         /// <seealso cref="Recv"/>
-        WinsockErrorCode RecvFrom(void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
+        WinsockErrorCode RecvFrom(void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
         {
             return Recv(buffer, bufferSize, bytesTransferred, timeout);
         }
@@ -1132,7 +1140,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <summary>Starts a <c>WSASendTo</c> of one buffer without address.</summary>
         /// <remarks>Without an address the same as <see cref="SendAsync"/> with the same arguments, which it calls.</remarks>
         /// <seealso cref="SendAsync"/>
-        WinsockErrorCode SendToAsync(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD flags, AsyncSocketIoRequest& asyncIoRequest) noexcept
+        WinsockErrorCode SendToAsync(const void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, DWORD flags, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
             return SendAsync(buffer, bufferSize, bytesTransferred, flags, asyncIoRequest);
         }
@@ -1140,7 +1148,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <summary>Sends one buffer with <c>WSASendTo</c> without address.</summary>
         /// <remarks>Without an address the same as <see cref="Send"/> with the same arguments, which it calls.</remarks>
         /// <seealso cref="Send"/>
-        WinsockErrorCode SendTo(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, DWORD flags,
+        WinsockErrorCode SendTo(const void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, DWORD flags,
                                 Duration timeout = Duration::Infinite()) noexcept
         {
             return Send(buffer, bufferSize, bytesTransferred, flags, timeout);
@@ -1149,7 +1157,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <summary>Starts a <c>WSASendTo</c> of one buffer without address or flags.</summary>
         /// <remarks>Without an address the same as <see cref="SendAsync"/> with the same arguments, which it calls.</remarks>
         /// <seealso cref="SendAsync"/>
-        WinsockErrorCode SendToAsync(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
+        WinsockErrorCode SendToAsync(const void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest) noexcept
         {
             return SendAsync(buffer, bufferSize, bytesTransferred, asyncIoRequest);
         }
@@ -1157,7 +1165,7 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// <summary>Sends one buffer with <c>WSASendTo</c> without address or flags.</summary>
         /// <remarks>Without an address the same as <see cref="Send"/> with the same arguments, which it calls.</remarks>
         /// <seealso cref="Send"/>
-        WinsockErrorCode SendTo(const void* buffer, std::uint32_t bufferSize, DWORD* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
+        WinsockErrorCode SendTo(const void* buffer, std::uint32_t bufferSize, ByteCount* bytesTransferred, Duration timeout = Duration::Infinite()) noexcept
         {
             return Send(buffer, bufferSize, bytesTransferred, timeout);
         }
@@ -1611,6 +1619,19 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         }
 
     protected:
+        // Starts an operation of a portable form: the Win32 call writes a DWORD, the form hands out
+        // a ByteCount. The count is written at once only, as by the Win32 call itself.
+        template <typename _Start>
+        WinsockErrorCode StartCounted(ByteCount* bytesTransferred, AsyncSocketIoRequest& asyncIoRequest, _Start start) noexcept
+        {
+            DWORD      transferred = 0;
+            DWORD*     count       = bytesTransferred ? &transferred : nullptr;
+            const auto error       = HandleCompletedRequest(start(count), count, asyncIoRequest);
+            if (bytesTransferred && WinsockError::Succeeded(error))
+                *bytesTransferred = transferred;
+            return error;
+        }
+
         /// <summary>Finishes the start of an operation.</summary>
         /// <typeparam name="_Request">
         /// The request type (<see cref="AsyncSocketIoRequestType"/>); a receive request (<see cref="AsyncSocketRecvIoRequest"/>)
@@ -1679,8 +1700,8 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
         /// the operation, see the class remarks); then stores the bytes transferred (<c>0</c> on failure).
         /// Task only. The request must live in the caller's frame until this returns.
         /// </remarks>
-        template <WaitableAsyncSocketIoRequestType _Request>
-        WinsockErrorCode WaitForAsyncIoOperation(WinsockErrorCode error, DWORD* bytesTransferred, _Request& asyncIoRequest,
+        template <WaitableAsyncSocketIoRequestType _Request, typename _Count>
+        WinsockErrorCode WaitForAsyncIoOperation(WinsockErrorCode error, _Count* bytesTransferred, _Request& asyncIoRequest,
                                                  Duration timeout = Duration::Infinite()) noexcept
         {
             if (WinsockError::IsPending(error)) {
@@ -1691,19 +1712,24 @@ namespace ThinkMeta::ConcurrentTasks::AsyncIo {
                     // stands. A cancelled socket operation leaves the socket fit for closing only.
                     CancelIoEx(reinterpret_cast<HANDLE>(GetSocket()), &asyncIoRequest.GetOverlapped());
                     asyncIoRequest.Wait();
-                    if (asyncIoRequest.GetError() == WinsockError::OperationAborted && status == WaitStatus::TimedOut) {
-                        if (bytesTransferred)
-                            *bytesTransferred = 0;
-                        return WinsockError::TimedOut;
-                    }
+                    error = _ErrorAfterCancel<WinsockError>(asyncIoRequest.GetError(), status);
+                } else {
+                    error = asyncIoRequest.GetError();
                 }
-                error = asyncIoRequest.GetError();
             }
 
             if (bytesTransferred)
                 *bytesTransferred = WinsockError::Succeeded(error) ? asyncIoRequest.GetTransferredBytes() : 0;
 
             return error;
+        }
+
+        // The same for an operation that reports no count (disconnect, TransmitFile, TransmitPackets).
+        template <WaitableAsyncSocketIoRequestType _Request>
+        WinsockErrorCode WaitForAsyncIoOperation(WinsockErrorCode error, std::nullptr_t, _Request& asyncIoRequest,
+                                                 Duration timeout = Duration::Infinite()) noexcept
+        {
+            return WaitForAsyncIoOperation(error, static_cast<ByteCount*>(nullptr), asyncIoRequest, timeout);
         }
     };
 } // namespace ThinkMeta::ConcurrentTasks::AsyncIo

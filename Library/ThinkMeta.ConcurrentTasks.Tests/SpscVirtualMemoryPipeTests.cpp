@@ -1,15 +1,20 @@
 #include "pch.h"
 #include "TestHelpers.h"
 
-#define NOMINMAX
-#include <Windows.h>
+#if defined(_WIN32)
+#    define NOMINMAX
+#    include <Windows.h>
+#endif
+
+#include <filesystem>
+#include <system_error>
 
 #include <ThinkMeta.ConcurrentTasks/Core.h>
 import ThinkMeta.ConcurrentTasks.AsyncIo.AsyncFile;
 import ThinkMeta.ConcurrentTasks.Memory.SpscVirtualMemoryPipe;
+import ThinkMeta.ConcurrentTasks.Platform.Error;
 import ThinkMeta.ConcurrentTasks.Synchronization.TaskGroup;
 import ThinkMeta.ConcurrentTasks.Tasks.Task;
-import ThinkMeta.ConcurrentTasks.Windows.Error;
 
 using namespace Microsoft::VisualStudio::CppUnitTestFramework;
 
@@ -111,10 +116,12 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
         }
 
         // A file whose size is no multiple of the sector size, written and read back through
-        // AsyncFile::WriteFile and ReadFile with FILE_FLAG_NO_BUFFERING: the last block is written
-        // padded and the file cut to its size, and the last read is rounded up and ended by the file.
+        // AsyncFile::WriteFile and ReadFile unbuffered (FILE_FLAG_NO_BUFFERING, O_DIRECT): the last
+        // block is written padded and the file cut to its size, and the last read is rounded up and
+        // ended by the file.
         TEST_METHOD(TestUnbufferedWriteAndReadOfOddSize)
         {
+            SkipWithoutAsyncIo();
             Assert::IsTrue(AsyncIo::EnableAsyncIo(), L"EnableAsyncIo failed");
             ConvertThreadToTask();
             SchedulerInfo   schedulerInfo = {.numberOfThreads = 2};
@@ -125,17 +132,14 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
             constexpr std::size_t Size  = 3 * Block + 12345; // three whole blocks and a tail inside a sector
             const auto            Pattern = [](std::size_t i) { return static_cast<std::byte>(i * 13 + 5); };
 
-            wchar_t tempPath[MAX_PATH];
-            wchar_t path[MAX_PATH];
-            ::GetTempPathW(MAX_PATH, tempPath);
-            ::GetTempFileNameW(tempPath, L"CT_Odd", 0, path);
+            const auto path = TempFilePath("CT_Odd");
 
             AsyncIo::BulkIoOptions options;
             options.blockSize = Block;
 
             // write: a producer task fills the pipe, WriteFile drains it unbuffered
             Memory::SpscVirtualMemoryPipe outPipe;
-            Windows::ErrorCode            writeError = Windows::Error::Success;
+            Platform::ErrorCode           writeError = Platform::Error::Success;
             ActionTask                    producer([&outPipe, Pattern]() {
                 outPipe.Initialize(Size);
                 for (std::size_t written = 0; written < Size;) {
@@ -149,7 +153,12 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 outPipe.SetEndOfStream();
             });
             ActionTask writer([&outPipe, &writeError, &path, &options]() {
-                writeError = AsyncIo::AsyncFile::WriteFile(path, GENERIC_WRITE, 0, CREATE_ALWAYS, FILE_FLAG_NO_BUFFERING, &outPipe, options);
+                writeError = AsyncIo::AsyncFile::WriteFile(path.c_str(),
+                                                           {.access     = Platform::FileAccess::Write,
+                                                            .creation   = Platform::FileCreation::CreateAlways,
+                                                            .unbuffered = true,
+                                                            .shareRead  = false},
+                                                           &outPipe, options);
             });
             {
                 Synchronization::TaskGroup group;
@@ -159,20 +168,20 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 scheduler.AddTask(&producer, TaskPriority::Normal);
                 group.Wait();
             }
-            Assert::AreEqual(static_cast<unsigned long>(Windows::Error::Success), static_cast<unsigned long>(writeError), L"WriteFile failed");
+            Assert::AreEqual(static_cast<unsigned long>(Platform::Error::Success), static_cast<unsigned long>(writeError), L"WriteFile failed");
 
-            WIN32_FILE_ATTRIBUTE_DATA attributes{};
-            Assert::IsTrue(::GetFileAttributesExW(path, GetFileExInfoStandard, &attributes) != 0, L"GetFileAttributesEx failed");
-            Assert::AreEqual(static_cast<unsigned long long>(Size), (static_cast<unsigned long long>(attributes.nFileSizeHigh) << 32) | attributes.nFileSizeLow,
-                             L"the file does not have its exact size");
+            std::error_code sizeError;
+            const auto      fileSize = std::filesystem::file_size(path, sizeError);
+            Assert::IsFalse(static_cast<bool>(sizeError), L"the size of the file cannot be read");
+            Assert::AreEqual(static_cast<unsigned long long>(Size), static_cast<unsigned long long>(fileSize), L"the file does not have its exact size");
 
             // read back: ReadFile fills a pipe unbuffered, a consumer task checks every byte
             Memory::SpscVirtualMemoryPipe inPipe;
-            Windows::ErrorCode            readError = Windows::Error::Success;
+            Platform::ErrorCode           readError = Platform::Error::Success;
             std::size_t                   received  = 0;
             std::size_t                   wrong     = 0;
             ActionTask                    reader([&inPipe, &readError, &path, &options]() {
-                readError = AsyncIo::AsyncFile::ReadFile(path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_FLAG_NO_BUFFERING, &inPipe, options);
+                readError = AsyncIo::AsyncFile::ReadFile(path.c_str(), {.unbuffered = true}, &inPipe, options);
             });
             ActionTask consumer([&inPipe, &received, &wrong, Pattern]() {
                 received = 0;
@@ -199,13 +208,13 @@ namespace ThinkMeta::ConcurrentTasks::Tests {
                 scheduler.AddTask(&reader, TaskPriority::Normal);
                 group.Wait();
             }
-            ::DeleteFileW(path);
+            DeleteTestFile(path);
 
             scheduler.Stop();
             ConvertTaskToThread();
             AsyncIo::DisableAsyncIo();
 
-            Assert::AreEqual(static_cast<unsigned long>(Windows::Error::Success), static_cast<unsigned long>(readError), L"ReadFile failed");
+            Assert::AreEqual(static_cast<unsigned long>(Platform::Error::Success), static_cast<unsigned long>(readError), L"ReadFile failed");
             Assert::AreEqual(Size, received, L"not every byte was read back");
             Assert::AreEqual(static_cast<std::size_t>(0), wrong, L"bytes read back differ from what was written");
         }

@@ -18,6 +18,8 @@ export module ThinkMeta.ConcurrentTasks.Synchronization.Waitable;
 
 export import ThinkMeta.ConcurrentTasks.Synchronization.Suspendable;
 
+import ThinkMeta.ConcurrentTasks.Platform.Clock;
+
 namespace ThinkMeta::ConcurrentTasks::Synchronization {
     /// <summary>Turns a non-blocking TryWait() into a suspending <see cref="Wait"/>().</summary>
     /// <typeparam name="_SuspensionKind">
@@ -90,14 +92,14 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
                 return self.SuspendFor(timeout);
             else {
                 // A resume without the condition waits on for the time that is left.
-                const long long deadline = timeout.IsInfinite() ? 0 : Deadline(timeout);
+                const std::int64_t deadline = timeout.IsInfinite() ? 0 : Deadline(timeout);
                 for (;;) {
                     if (const auto status = self.SuspendFor(timeout); status != WaitStatus::Signaled)
                         return status;
                     if (self.TryWait())
                         return WaitStatus::Signaled;
                     if (!timeout.IsInfinite()) {
-                        const long long left = deadline - Now();
+                        const std::int64_t left = deadline - Now();
                         if (left <= 0)
                             return WaitStatus::TimedOut;
                         timeout = Duration{left};
@@ -111,19 +113,12 @@ namespace ThinkMeta::ConcurrentTasks::Synchronization {
         static constexpr bool Rechecks = requires { requires T::WaitRechecks; };
 
         // The clock of a timed wait that waits again, in 100 ns units. Only on the rare path after
-        // a resume without the condition, so the two QPC calls do not matter.
-        static long long Now() noexcept
-        {
-            LARGE_INTEGER counter;
-            LARGE_INTEGER frequency;
-            QueryPerformanceCounter(&counter);
-            QueryPerformanceFrequency(&frequency);
-            return counter.QuadPart / frequency.QuadPart * 10000000 + counter.QuadPart % frequency.QuadPart * 10000000 / frequency.QuadPart;
-        }
+        // a resume without the condition.
+        static std::int64_t Now() noexcept { return Platform::Clock::Now(); }
 
-        static long long Deadline(Duration timeout) noexcept
+        static std::int64_t Deadline(Duration timeout) noexcept
         {
-            const long long now = Now();
+            const std::int64_t now = Now();
             return timeout.hundredNanoseconds < Duration::Infinite().hundredNanoseconds - now ? now + timeout.hundredNanoseconds
                                                                                                 : Duration::Infinite().hundredNanoseconds;
         }
