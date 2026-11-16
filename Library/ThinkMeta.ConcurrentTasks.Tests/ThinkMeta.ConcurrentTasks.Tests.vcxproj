@@ -52,6 +52,7 @@
     <ClCompile Include="SchedulerStarvationTests.cpp" />
     <ClCompile Include="TaskSwapSchedulerTests.cpp" />
     <ClCompile Include="DispatcherSchedulerTests.cpp" />
+    <ClCompile Include="LocalSchedulerTests.cpp" />
     <ClCompile Include="WaitableLambdaTaskTests.cpp" />
     <ClCompile Include="SpscVirtualMemoryPipeTests.cpp" />
     <ClCompile Include="PlatformFileTests.cpp" />

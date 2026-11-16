@@ -563,6 +563,37 @@ namespace ThinkMeta::ConcurrentTasks {
         virtual void ContinueTask(SuspendedTask task) noexcept = 0;
     };
 
+    /// <summary>A scheduler that runs its tasks inside <see cref="Run"/>, on the thread that calls it.</summary>
+    /// <remarks>
+    /// Created by <see cref="CreateLocalScheduler"/>. The scheduler has no threads: tasks added with
+    /// <see cref="AddTask"/> wait until <see cref="Run"/> runs them, and Run returns once every task
+    /// of the scheduler has ended. While all of them wait, the thread sleeps until one can go on.
+    ///
+    /// The thread that calls Run owns the scheduler: only it adds tasks, before Run or from the
+    /// scheduler's tasks. Tasks may be resumed from any thread, also by timers and by the completion
+    /// of asynchronous I/O, so they can wait for tasks of other schedulers. The order is that of the
+    /// default scheduler: resumed before new tasks, high before normal priority, first in first
+    /// out within each.
+    ///
+    /// <see cref="Start"/> and <see cref="Stop"/> do nothing. <see cref="Destroy"/> is called
+    /// once no task is left and Run has returned.
+    /// </remarks>
+    /// <seealso cref="CreateLocalScheduler"/>
+    struct CT_NOVTABLE ILocalScheduler : ITaskScheduler {
+        /// <summary>Runs the scheduler's tasks on the calling thread until none is left.</summary>
+        /// <remarks>
+        /// Blocks the calling thread until every task of the scheduler has ended, including tasks
+        /// the tasks add and tasks added by time (<see cref="AddTimedTask"/>). While all of them
+        /// wait, the thread sleeps. May be called again once it has returned.
+        ///
+        /// Only on a plain thread: not from a task of any scheduler and not on a converted thread
+        /// (<see cref="ConvertThreadToTask"/>), and not twice at the same time. While Run runs, only
+        /// its thread may add tasks (<see cref="AddTask"/>, <see cref="AddTimedTask"/>); that is,
+        /// the scheduler's own tasks. The scheduler may be destroyed as soon as Run has returned.
+        /// </remarks>
+        virtual void Run() noexcept = 0;
+    };
+
     /// <summary>Hands a task that can run to the event loop of a dispatcher scheduler.</summary>
     /// <param name="scheduler">The scheduler the task belongs to.</param>
     /// <param name="task">The task; the loop passes it to <see cref="IDispatcherScheduler::ContinueTask"/>.</param>
@@ -621,15 +652,15 @@ namespace ThinkMeta::ConcurrentTasks {
         /// <seealso cref="ITaskSwitchPolicy"/>
         ITaskSwitchPolicy* taskSwitchPolicy = nullptr;
 
-        /// <summary>Capacity of each of the Default scheduler's four task queues.</summary>
+        /// <summary>Capacity of each of the four task queues of a Default or a local scheduler.</summary>
         /// <remarks>
         /// It bounds the tasks that can be runnable at the same time per queue - new tasks per
         /// priority, and resumed or yielded tasks per priority - so choose it larger than the most
         /// tasks the application can have runnable at once; filling a queue is invalid use.
         /// Suspended tasks do not count. Rounded up to the next power of two; <c>0</c> means
         /// <see cref="DefaultTaskQueueCapacity"/>; above <see cref="MaximumTaskQueueCapacity"/>
-        /// <see cref="CreateTaskScheduler"/> fails. Each slot takes one cache line. Ignored by
-        /// <see cref="SchedulerKind::TaskSwap"/>.
+        /// <see cref="CreateTaskScheduler"/> and <see cref="CreateLocalScheduler"/> fail. Each slot
+        /// takes one cache line. Ignored by <see cref="SchedulerKind::TaskSwap"/>.
         /// </remarks>
         std::uint32_t taskQueueCapacity = 0;
 
@@ -640,9 +671,9 @@ namespace ThinkMeta::ConcurrentTasks {
         /// unless the linker was told otherwise), on Linux 1 MiB. Rounded up to the granularity of
         /// address space (64 KiB on Windows, the page size on Linux). Every task context the
         /// scheduler creates gets a stack of this size; a task's stack must hold its deepest call
-        /// chain, as there is no way to grow it later. A <see cref="SchedulerKind::Default"/> and a
-        /// <see cref="SchedulerKind::TaskSwap"/> scheduler honour it; a dispatcher scheduler uses
-        /// the default. Below each stack lies an inaccessible guard zone (Linux: 64 KiB, as clang
+        /// chain, as there is no way to grow it later. A <see cref="SchedulerKind::Default"/>, a
+        /// <see cref="SchedulerKind::TaskSwap"/> and a local scheduler honour it; a dispatcher
+        /// scheduler uses the default. Below each stack lies an inaccessible guard zone (Linux: 64 KiB, as clang
         /// probes large frames only with <c>-fstack-clash-protection</c>), so an overflow faults.
         /// On Linux a signal handler installed without <c>SA_ONSTACK</c> runs on the stack of the
         /// task it interrupts and needs room there; the core installs no alternate signal stack.
@@ -679,6 +710,26 @@ namespace ThinkMeta::ConcurrentTasks {
     /// <seealso cref="IDispatcherScheduler"/>
     /// <seealso cref="ITaskScheduler::Destroy"/>
     CT_CORE IDispatcherScheduler* CreateDispatcherScheduler(DispatcherWakeProc wake, void* context) noexcept;
+
+    /// <summary>Creates a local scheduler, whose tasks run inside <see cref="ILocalScheduler::Run"/>.</summary>
+    /// <param name="info">
+    /// The scheduler's parameters; required. Of these, <see cref="SchedulerInfo::version"/>,
+    /// <see cref="SchedulerInfo::taskQueueCapacity"/> and <see cref="SchedulerInfo::taskStackSize"/>
+    /// apply; the other fields are ignored. The core copies the struct.
+    /// </param>
+    /// <returns>
+    /// The scheduler, or <c>nullptr</c> if <paramref name="info"/> is null, its version is unknown,
+    /// <see cref="SchedulerInfo::taskQueueCapacity"/> is too large, or memory ran out.
+    /// </returns>
+    /// <remarks>
+    /// Create it on the thread that will call <see cref="ILocalScheduler::Run"/>. The capacity
+    /// bounds the runnable tasks per queue, as with the <see cref="SchedulerKind::Default"/>
+    /// scheduler: new tasks per priority, and resumed or yielded tasks per priority; filling a queue
+    /// is invalid use.
+    /// </remarks>
+    /// <seealso cref="ILocalScheduler"/>
+    /// <seealso cref="ITaskScheduler::Destroy"/>
+    CT_CORE ILocalScheduler* CreateLocalScheduler(const SchedulerInfo* info) noexcept;
 
     /// <summary>Returns the scheduler running the calling task.</summary>
     /// <returns>The scheduler; owned by its creator, not by the caller.</returns>

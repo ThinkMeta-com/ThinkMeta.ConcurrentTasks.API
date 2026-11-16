@@ -5,7 +5,8 @@
 # Built through the core's CMakeLists.txt or the API's own (CT_BUILD_SAMPLES, on by default). Each
 # sample is also a test: ctest runs it and expects exit code 0, as every sample checks its own
 # results. Windows only, not here: BluetoothDevices, GuideUiThread, GuideThreadCallbacks, Ui,
-# Capture, Bluetooth, Hashing (both use BCrypt) and the encoder samples.
+# Capture, Bluetooth, Hashing (both use BCrypt), TaskBasedProgramming (BCrypt too) and the encoder
+# samples.
 
 # One program from one source file, linked as the unit tests are: the library as a target, the
 # core as a file (see ct_add_tests in Library/ThinkMeta.ConcurrentTasks.Tests/CMakeLists.txt).
@@ -36,6 +37,8 @@ ct_add_sample(Sample.HelloTask             ${CT_DOCS_DIR}/HelloTask/hello-task.c
 ct_add_sample(Sample.PingPong              ${CT_DOCS_DIR}/PingPong/ping-pong.cpp)
 ct_add_sample(Sample.ProducerConsumer      ${CT_DOCS_DIR}/ProducerConsumer/producer-consumer.cpp)
 ct_add_sample(Sample.Timeout               ${CT_DOCS_DIR}/Timeout/timeout.cpp)
+ct_add_sample(Sample.TwoSchedulers         ${CT_DOCS_DIR}/TwoSchedulers/two-schedulers.cpp)
+ct_add_sample(Sample.ConceptLocalScheduler ${CT_DOCS_DIR}/ConceptLocalScheduler/concept-local-scheduler.cpp)
 ct_add_sample(Sample.WaitForAGroup         ${CT_DOCS_DIR}/WaitForAGroup/wait-for-a-group.cpp)
 ct_add_sample(Sample.GuideCustomPrimitives ${CT_DOCS_DIR}/GuideCustomPrimitives/guide-custom-primitives.cpp)
 ct_add_sample(Sample.GuideEvents           ${CT_DOCS_DIR}/GuideEvents/guide-events.cpp)

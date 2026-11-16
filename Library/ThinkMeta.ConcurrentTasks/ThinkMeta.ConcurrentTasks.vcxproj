@@ -67,6 +67,7 @@
     <ClCompile Include="Tasks/Task.ixx" />
     <ClCompile Include="Tasks\RunAndWait.ixx" />
     <ClCompile Include="Schedulers\DispatcherScheduler.ixx" />
+    <ClCompile Include="Schedulers\LocalScheduler.ixx" />
     <ClCompile Include="Synchronization/TaskGroup.ixx" />
     <ClCompile Include="Collections/BoundedPointerQueue.ixx" />
     <ClCompile Include="Synchronization/Waitable.ixx" />

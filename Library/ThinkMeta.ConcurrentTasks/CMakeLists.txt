@@ -47,6 +47,7 @@ set(CT_LIBRARY_MODULES
     Tasks/Task.ixx
     Tasks/WaitableTask.ixx
     Tasks/RunAndWait.ixx
+    Schedulers/LocalScheduler.ixx
     AsyncIo/AsyncIoRequest.ixx
     AsyncIo/AsyncFileIoRequest.ixx
     AsyncIo/AsyncFile.ixx

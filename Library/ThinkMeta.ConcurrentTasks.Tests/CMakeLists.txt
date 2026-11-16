@@ -53,6 +53,7 @@ if(CT_BUILD_UNIT_TESTS AND TARGET ThinkMeta.ConcurrentTasks.Core)
         TimerTests.cpp
         SchedulerStarvationTests.cpp
         TaskSwapSchedulerTests.cpp
+        LocalSchedulerTests.cpp
         WaitableLambdaTaskTests.cpp
         SpscVirtualMemoryPipeTests.cpp
         PlatformFileTests.cpp
